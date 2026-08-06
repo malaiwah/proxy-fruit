@@ -82,4 +82,5 @@ any FAIL = the toolchain change is not cleared for paid runs.
 
 | date | node | duration | cost | result | notes |
 |---|---|---|---|---|---|
+| 2026-08-06 | home RTX 5090 (TIER=0, container, NFS workspace) | ~2 h incl. debug | **$0** | **17/17 PASS** | needed TSCALE=3 (NFS-slow init blew fixed timeouts — T07 finished gracefully but timeout+pipefail recorded FAIL; T11 drill fired mid-init; T12 pushes slow on home upstream) + replay-source fallback. GOLDEN cross-site: T04 11.319 vs 11.315, T18 12.068 vs 12.068 exact. |
 | 2026-08-06 | 4×RTX6000Pro spot IN1 | ~2.9 h total (incl. 1 debug round) | ~$11 | **20/20 PASS** | run 1: T01 timeout + run1-through-env bash bug (both fixed); run 2: T00–T17 all PASS; addendum T18 Δ=0.001 (criterion fixed to tolerance), T19 PASS. All-reduce 69.6 GB/s untuned. First code execution on real RTX 6000 Pro silicon. |
