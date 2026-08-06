@@ -30,6 +30,7 @@ STEP_RE = re.compile(
     r"(?: gnorm ([\d.]+))? lr ([\d.e+-]+) ([\d.]+)s/step")
 INC_RE = re.compile(r"^\[incarnation\] step=(\d+) .*?gpu=(\S+) .*?"
                     r"time=(\S+)")
+TELEM_RE = re.compile(r"^\[telem\] step=(\d+) time=(\S+) (.*)")
 KV = re.compile(r"(\w+)=([\d.]+)")
 
 
@@ -43,6 +44,9 @@ def parse_key(line):
     m = INC_RE.match(line)
     if m:  # additive: unique per start event (keyed by timestamp)
         return ("inc", m.group(3))
+    m = TELEM_RE.match(line)
+    if m:
+        return ("telem", m.group(2))
     return None
 
 
@@ -82,12 +86,20 @@ def main():
     open(logp, "w").write("\n".join(lines) + "\n")
 
     incs = []
+    telem = {}
     vals, steps = {}, {"step": [], "loss": [], "mtp": [], "aux": [],
                        "gnorm": [], "lr": [], "sps": []}
     for line in lines:
         m = INC_RE.match(line)
         if m:
             incs.append((int(m.group(1)), m.group(2)))
+            continue
+        m = TELEM_RE.match(line)
+        if m:
+            st = int(m.group(1))
+            if st > 0:
+                for k, v in KV.findall(m.group(3)):
+                    telem.setdefault(k, []).append((st, float(v)))
             continue
         m = VAL_RE.match(line)
         if m:
@@ -104,7 +116,8 @@ def main():
             steps["lr"].append(float(m.group(6)))
             steps["sps"].append(float(m.group(7)))
 
-    fig, ax = plt.subplots(2, 2, figsize=(13, 8.5), dpi=120)
+    nrows = 3 if telem else 2
+    fig, ax = plt.subplots(nrows, 2, figsize=(13, 4.25 * nrows), dpi=120)
     a = ax[0][0]
     for k in sorted(vals):
         if k == "global":
@@ -154,6 +167,36 @@ def main():
     a.set_title("router aux + step time")
     a.grid(alpha=0.3)
 
+    if telem:
+        def tl(key):
+            pts = sorted(telem.get(key, []))
+            return ([p[0] for p in pts], [p[1] for p in pts])
+        a = ax[2][0]
+        x, y = tl("gpuutil")
+        a.plot(x, y, lw=1.0, color="tab:green", label="GPU util %")
+        a.set_ylim(0, 105)
+        a.set_ylabel("GPU util %")
+        a2 = a.twinx()
+        x, y = tl("vram")
+        a2.plot(x, y, lw=1.0, color="tab:blue", alpha=0.7, label="VRAM GB")
+        a2.set_ylabel("VRAM GB (total)")
+        a.set_title("GPU utilization + VRAM")
+        a.grid(alpha=0.3)
+        a = ax[2][1]
+        x, y = tl("cpu")
+        a.plot(x, y, lw=0.9, color="tab:orange", label="CPU %")
+        x, y = tl("mem")
+        a.plot(x, y, lw=0.9, color="tab:purple", label="RAM GB")
+        a.set_ylabel("CPU % / RAM GB")
+        a2 = a.twinx()
+        for k, c in (("rx", "tab:cyan"), ("tx", "tab:pink")):
+            x, y = tl(k)
+            a2.plot(x, y, lw=0.7, alpha=0.7, color=c, label=f"net {k} MB/s")
+        a2.set_ylabel("net MB/s")
+        a.legend(fontsize=7, loc="upper left")
+        a2.legend(fontsize=7, loc="upper right")
+        a.set_title("host CPU / RAM / network")
+        a.grid(alpha=0.3)
     for row in ax:
         for a in row:
             a.set_xlabel("step")

@@ -9,7 +9,7 @@ IMG=docker.io/voipmonitor/vllm:gilded-gnosis-v20-vllmf5981f1-si978cdb3-fi801d57a
 WORK=/mnt/vault/llm/fruit-pilot/progress
 mkdir -p "$WORK"
 
-jl exec 465422 -- bash -c 'grep -aE "^\[val |^\[[0-9]+/|^\[incarnation" /workspace/run.log' \
+jl exec 465422 -- bash -c 'grep -aE "^\[val |^\[[0-9]+/|^\[incarnation" /workspace/run.log; cat /workspace/telem.log 2>/dev/null' \
   2>/dev/null | grep -aE '^\[' > "$WORK/node_lines.txt" || true
 [ -s "$WORK/node_lines.txt" ] || { echo "NO-NODE-LINES (using ledger only)"; \
   : > "$WORK/node_lines.txt"; }
