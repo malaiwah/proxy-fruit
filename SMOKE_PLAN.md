@@ -71,6 +71,27 @@ any FAIL = the toolchain change is not cleared for paid runs.
 
 ## Home-tier checklist (manual, with the container)
 
+**Export invocation recipe** (every item below was a measured failure on
+2026-08-06 — do not rediscover them):
+- Mount the Legume tools dir AT `/tools` (`-v ~/glm52-franken/tools:/tools`)
+  and put it on `PYTHONPATH` — `export_fruit.py` imports `glm_franken` and
+  execs `/tools/encode_tr3_v31.py` by absolute path.
+- The encoder pins `exllamav3==0.0.43` (pure-python wheel). Install with
+  `--no-deps` (1.x pulls a flash-attn source build that fails in the
+  runtime image) and PURGE any newer exllamav3 from the pip volume first —
+  stale dist-info shadows the pin.
+- Output dir must not exist (exporter guard).
+- `fruit_serve_test.py` takes POSITIONAL args (`ckpt kv_dtype`);
+  `fruit_serve_r28.py`/`_long.py` honor `FRUIT_CKPT` env.
+- r25/r28 image tags differ per release train — check `podman images`, do
+  not guess (`...20260803-r25`, `...20260804-r28` as of this writing).
+
+Measured on the step-33.6k mid-run checkpoint: export of 5.04B = **~49 s
+per MoE layer, ~12 min total** on one RTX 5090 (2.89 GiB out); serve
+gauntlets pass on both r25 (fp8_ds_mla) and r28 (nvfp4_ds_mla +
+B12X_MLA_SPARSE), decode 35.9 tok/s, full small-prompt battery green,
+coherent quantized generations.
+
 1. `export_fruit.py` on a smoke checkpoint (FRUIT_TIERS=k3, PAD_INTER as
    needed) — shape/config/manifest correctness.
 2. `fruit_serve_test.py` (r25 fp8) and `fruit_serve_r28.py`

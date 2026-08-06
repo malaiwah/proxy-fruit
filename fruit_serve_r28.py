@@ -9,7 +9,7 @@ from vllm.inputs import TokensPrompt
 
 def main():
     
-    ckpt = "/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-pilot"
+    ckpt = os.environ.get("FRUIT_CKPT", "/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-pilot")
     llm = LLM(model=ckpt, kv_cache_dtype="nvfp4_ds_mla", max_model_len=2048,
               max_num_seqs=4, max_num_batched_tokens=2048,
               trust_remote_code=False, enforce_eager=True,
