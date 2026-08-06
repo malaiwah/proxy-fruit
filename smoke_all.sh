@@ -18,6 +18,7 @@ TIER=${TIER:-full}
 TSCALE=${TSCALE:-1}   # timeout multiplier for slow tiers (home/NFS: 3)
 MULTI=" T00 T03 T05 T10 T17 "
 want() {
+  if [ -n "${ONLY:-}" ]; then [[ " $ONLY " == *" $1 "* ]]; return; fi
   case "$TIER" in
     1) [[ "$MULTI" == *" $1 "* ]] ;;
     0) [[ "$MULTI" != *" $1 "* ]] ;;
