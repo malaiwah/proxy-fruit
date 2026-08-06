@@ -131,7 +131,29 @@ def main():
     if vals.get("global"):
         xs, ys = zip(*sorted(set(vals["global"])))
         a.plot(xs, ys, lw=2.6, color="black", label="global")
-        a.set_title(f"val loss (global {ys[-1]:.3f} @ step {xs[-1]:,})")
+        title = f"val loss (global {ys[-1]:.3f} @ step {xs[-1]:,})"
+        if len(xs) >= 8:
+            # scaling-fit forecast: L = Linf + A*step^(-alpha), grid fit
+            import numpy as np
+            X = np.array(xs, dtype=float); Y = np.array(ys, dtype=float)
+            best = None
+            for linf in np.arange(0.5, Y.min(), 0.02):
+                for alpha in np.arange(0.05, 1.01, 0.05):
+                    b = X ** (-alpha)
+                    A = ((Y - linf) * b).sum() / (b * b).sum()
+                    if A <= 0:
+                        continue
+                    err = ((linf + A * b - Y) ** 2).sum()
+                    if best is None or err < best[0]:
+                        best = (err, linf, A, alpha)
+            if best:
+                tot = int(os.environ.get("TOTAL_STEPS", "46793"))
+                pred = best[1] + best[2] * tot ** (-best[3])
+                xs_f = np.linspace(X.min(), tot, 100)
+                a.plot(xs_f, best[1] + best[2] * xs_f ** (-best[3]),
+                       lw=0.9, ls=":", color="gray", alpha=0.8)
+                title += f"  ·  fit forecast @{tot//1000}k: {pred:.3f}"
+        a.set_title(title, fontsize=9)
     a.legend(fontsize=7, ncol=2)
     a.grid(alpha=0.3)
 
@@ -157,7 +179,15 @@ def main():
         a2.plot(gx, gy, lw=0.5, alpha=0.6, color="tab:red", label="gnorm")
         a2.set_ylabel("gnorm")
         a2.set_ylim(0, 3)
-    a.set_title("lr + gnorm")
+    gs = [y for y in s["gnorm"] if y is not None]
+    if gs:
+        clip_frac = sum(1 for y in gs if y >= 0.995) / len(gs)
+        med = sorted(gs)[len(gs) // 2]
+        spikes = sum(1 for y in gs if y > 4 * med)
+        a.set_title(f"lr + gnorm  (clip {clip_frac*100:.1f}% · "
+                    f"spikes>4x-med {spikes})")
+    else:
+        a.set_title("lr + gnorm")
     a.grid(alpha=0.3)
 
     a = ax[1][1]
@@ -168,7 +198,23 @@ def main():
     a2 = a.twinx()
     a2.plot(s["step"], s["sps"], lw=0.8, alpha=0.7, color="tab:gray")
     a2.set_ylabel("s/step")
-    a.set_title("router aux + step time")
+    mfu_txt = ""
+    m_inc = [ln for ln in lines if INC_RE.match(ln)]
+    if m_inc and s["sps"]:
+        import re as _re
+        last = m_inc[-1]
+        tps_m = _re.search(r"tps=(\d+)", last)
+        gpu_m = _re.search(r"gpu=\S+x(\d+)", last)
+        if tps_m and gpu_m:
+            tps = int(tps_m.group(1)); ng = int(gpu_m.group(1))
+            spstep = sorted(s["sps"])[len(s["sps"]) // 2]
+            toks = tps / spstep
+            n_act = float(os.environ.get("ACTIVE_PARAMS", "0.46e9"))
+            peak = float(os.environ.get("GPU_PEAK_FLOPS", "989.5e12"))
+            mfu = 6 * n_act * toks / (ng * peak) * 100
+            mfu_txt = (f"  ({toks/ng/1e3:.1f}k tok/s/GPU · "
+                       f"MFU~{mfu:.1f}%)")
+    a.set_title("router aux + step time" + mfu_txt)
     a.grid(alpha=0.3)
 
     if telem:

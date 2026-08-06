@@ -496,6 +496,7 @@ class ShardMix:
                                     dtype=np.uint64, mode="r")
                        for n in self.names
                        if (Path(shard_dir) / f"{n}.starts.u64").exists()}
+        self.consumed = {n: 0 for n in self.names}
         print(f"[shards] {len(self.names)} sources, "
               f"{sum(len(v) for v in self.maps.values())/1e9:.2f}B tokens",
               flush=True)
@@ -506,6 +507,7 @@ class ShardMix:
             if self.masks is not None else None
         for i in range(bs):
             n = self.names[rng.choice(len(self.names), p=self.weights)]
+            self.consumed[n] += 1
             arr = self.maps[n]
             hi = len(arr) - self.val_tokens - seq - 2
             j = -1
@@ -667,6 +669,10 @@ def main():
             gl = sum(sum(v) for v in per.values()) / sum(
                 len(v) for v in per.values())
             print(f"[val {step}] global={gl:.4f}  {msg}", flush=True)
+            tot = max(1, sum(mix.consumed.values()))
+            print("[mix " + str(step) + "] " + "  ".join(
+                f"{k}={v/tot:.3f}" for k, v in
+                sorted(mix.consumed.items())), flush=True)
         model.train()
     model = Fruit().to(dev, torch.bfloat16)
     if os.environ.get("FP8_LINEAR", "") == "1":
