@@ -118,6 +118,15 @@ the full ledger. Highlights, all measured on this hardware, not quoted:
   20 MiB at the step-0→1 boundary.
 - DDP + activation checkpointing needs `static_graph=True`.
 
+## Regression testing
+
+Every substantive toolchain change runs the [smoke suite](SMOKE_PLAN.md)
+— 20 tests covering data prep, every trainer knob, DDP, and all resumption
+paths, on a ~$11 spot node. Example output (tiny-geometry smoke run on
+4× RTX 6000 Pro, incl. the telemetry/throttle-forensics rows):
+
+![smoke suite output](https://huggingface.co/malaiwah/fruit-smoke/resolve/main/val_progress.png)
+
 ## Reproduce
 
 ```
