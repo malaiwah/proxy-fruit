@@ -4,6 +4,12 @@
 on consumer and spot hardware.** (~$300 spot compute, ~2 days on 4×H200,
 every step rehearsed first on one RTX 5090.)
 
+![live training progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/val_progress.png)
+*Live from the current Phase-1 run — regenerated every ~3 h by the
+toolchain's [ledger publisher](progress_publish.py): per-source val curves,
+train/MTP loss, LR + grad-norm, router aux + step time, host/GPU
+telemetry, with incarnation markers at every restart or node change.*
+
 This repo trains **GLM-5.2-SIQ-Fruit**: a 5B-parameter (~0.46B active)
 Mixture-of-Experts model that is an *architecture-complete mimic* of the
 GLM-5.2 production architecture. "Serving proxy" here means a **CI fixture
