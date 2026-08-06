@@ -36,7 +36,6 @@ EOF
 export TOK_DIR=/workspace/tokenizer FRUIT_OUT_DIR=/workspace/out \
   EVAL_EVERY=100000 MOE_IMPL=stacked LR=3e-4 SEQ=512
 mkdir -p /workspace/out
-run1() { CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py; }   # single GPU
 last_loss() { grep -aE "^\[[0-9]+/" "$1" | tail -1 | grep -aoE "loss [0-9.]+" | cut -d' ' -f2; }
 
 echo "=== T00 GPU acceptance ==="
@@ -105,9 +104,9 @@ if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke3 \
 echo "=== T04 grouped == stacked (deterministic) ==="
 rm -f /workspace/out/smoke4a_ckpt.pt /workspace/out/smoke4b_ckpt.pt
 timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
-  SAVE_NAME=smoke4a MOE_IMPL=stacked run1 > /tmp/t04a.log 2>&1
+  SAVE_NAME=smoke4a MOE_IMPL=stacked CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t04a.log 2>&1
 timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
-  SAVE_NAME=smoke4b MOE_IMPL=grouped run1 > /tmp/t04b.log 2>&1
+  SAVE_NAME=smoke4b MOE_IMPL=grouped CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t04b.log 2>&1
 A=$(last_loss /tmp/t04a.log); B=$(last_loss /tmp/t04b.log)
 if $PY -c "exit(0 if abs($A-$B) < 0.02 else 1)" 2>/dev/null; then t T04 "PASS($A~$B)"; else t T04 "FAIL($A vs $B)"; fi
 
@@ -122,23 +121,23 @@ if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke5 \
 echo "=== T06 FP8_LINEAR ==="
 rm -f /workspace/out/smoke6_ckpt.pt
 if timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke6 \
-    FP8_LINEAR=1 run1 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T06 PASS; else t T06 FAIL; fi
+    FP8_LINEAR=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T06 PASS; else t T06 FAIL; fi
 
 echo "=== T07 SFT masked train ==="
 rm -f /workspace/out/smoke7_ckpt.pt
 if timeout 600 env SHARD_DIR=/workspace/sft-shards BS=8 STEPS=80 SAVE_NAME=smoke7 \
-    MTP_W=0.1 run1 2>&1 | tee /tmp/t07.log | tail -2 | grep -aq TRAIN-DONE \
+    MTP_W=0.1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t07.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "SFT loss masks active" /tmp/t07.log; then t T07 PASS; else t T07 FAIL; fi
 
 echo "=== T08 INTRADOC_MASK ==="
 rm -f /workspace/out/smoke8_ckpt.pt
 if timeout 600 env SHARD_DIR=/workspace/sft-shards BS=4 STEPS=40 SAVE_NAME=smoke8 \
-    INTRADOC_MASK=1 run1 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T08 PASS; else t T08 FAIL; fi
+    INTRADOC_MASK=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T08 PASS; else t T08 FAIL; fi
 
 echo "=== T09 QNOISE ==="
 rm -f /workspace/out/smoke9_ckpt.pt
 if timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke9 \
-    QNOISE=0.015 run1 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T09 PASS; else t T09 FAIL; fi
+    QNOISE=0.015 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T09 PASS; else t T09 FAIL; fi
 
 echo "=== T10 token-clock tier hop (4 ranks -> 1 rank) ==="
 rm -f /workspace/out/smoke10_ckpt.pt
@@ -148,7 +147,7 @@ timeout --signal=KILL 75 env SHARD_DIR=/workspace/shards BS=4 STEPS=999999 \
 sleep 3; pkill -f train_fruit.py 2>/dev/null; sleep 3
 if timeout 900 env SHARD_DIR=/workspace/shards BS=8 STEPS=999999 \
     TOKEN_BUDGET=3000000 WARMUP=20 SAVE_NAME=smoke10 DETERMINISTIC_DATA=1 \
-    run1 2>&1 | tee /tmp/t10b.log | tail -2 | grep -aq TRAIN-DONE \
+    CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t10b.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "\[resume\]" /tmp/t10b.log && grep -aq "\[tokens\]" /tmp/t10b.log; then
   t T10 PASS; else t T10 FAIL; fi
 
@@ -164,7 +163,7 @@ echo "=== T12 SNAPSHOT_FORK + push ==="
 rm -f /workspace/out/smoke12_ckpt.pt
 if timeout 900 env SHARD_DIR=/workspace/shards BS=8 STEPS=130 SAVE_NAME=smoke12 \
     SNAPSHOT_SAVE=1 SNAPSHOT_FORK=1 HF_PUSH_REPO=malaiwah/fruit-smoke \
-    PUSH_EVERY=60 run1 2>&1 | tee /tmp/t12.log | tail -2 | grep -aq TRAIN-DONE \
+    PUSH_EVERY=60 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t12.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "\[snap\] paused" /tmp/t12.log; then t T12 PASS; else t T12 FAIL; fi
 
 echo "=== T13 FP32_MASTER + paged + resume continuity ==="
@@ -175,7 +174,7 @@ timeout --signal=KILL 80 env SHARD_DIR=/workspace/shards BS=8 STEPS=5000 \
 pkill -f train_fruit.py 2>/dev/null; sleep 3
 PRE=$(last_loss /tmp/t13a.log)
 timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=$(( $(grep -aoE "^\[[0-9]+/" /tmp/t13a.log | tail -1 | tr -d '[/') + 40 )) \
-  SAVE_NAME=smoke13 FP32_MASTER=1 OPT_8BIT=paged run1 > /tmp/t13b.log 2>&1 || true
+  SAVE_NAME=smoke13 FP32_MASTER=1 OPT_8BIT=paged CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t13b.log 2>&1 || true
 POST=$(last_loss /tmp/t13b.log)
 if $PY -c "exit(0 if float($POST) < float($PRE)*1.5 + 1 else 1)" 2>/dev/null \
    && grep -aq "\[resume\]" /tmp/t13b.log; then t T13 "PASS($PRE->$POST)"; else t T13 "FAIL($PRE->$POST)"; fi
@@ -183,7 +182,7 @@ if $PY -c "exit(0 if float($POST) < float($PRE)*1.5 + 1 else 1)" 2>/dev/null \
 echo "=== T14 INDEXER_DISTILL ==="
 rm -f /workspace/out/smoke14_ckpt.pt
 if timeout 600 env SHARD_DIR=/workspace/shards BS=4 STEPS=80 SEQ=512 \
-    SAVE_NAME=smoke14 INDEXER_DISTILL=1 run1 2>&1 | tee /tmp/t14.log \
+    SAVE_NAME=smoke14 INDEXER_DISTILL=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t14.log \
     | tail -2 | grep -aq TRAIN-DONE && grep -aq "distill\] kl" /tmp/t14.log; then
   t T14 PASS; else t T14 FAIL; fi
 
@@ -196,7 +195,7 @@ p = hf_hub_download('malaiwah/fruit-smoke', 'checkpoints/smoke3_ckpt.pt',
                     token=os.environ['HF_TOKEN'])
 shutil.copy(p, '/workspace/out/smoke3_ckpt.pt'); print('PULLED')" 2>&1 | grep -aq PULLED \
    && timeout 600 env SHARD_DIR=/workspace/shards BS=4 STEPS=140 SAVE_NAME=smoke3 \
-      run1 2>&1 | tee /tmp/t15.log | grep -aq TRAIN-DONE \
+      CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t15.log | grep -aq TRAIN-DONE \
    && grep -aq "\[resume\]" /tmp/t15.log; then t T15 PASS; else t T15 FAIL; fi
 
 echo "=== T16 probe_ckpt ==="
