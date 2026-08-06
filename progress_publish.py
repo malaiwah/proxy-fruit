@@ -96,10 +96,13 @@ def main():
             continue
         m = TELEM_RE.match(line)
         if m:
-            st = int(m.group(1))
-            if st > 0:
-                for k, v in KV.findall(m.group(3)):
-                    telem.setdefault(k, []).append((st, float(v)))
+            from datetime import datetime as _dt
+            try:
+                ts = _dt.fromisoformat(m.group(2).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            for k, v in KV.findall(m.group(3)):
+                telem.setdefault(k, []).append((ts, float(v)))
             continue
         m = VAL_RE.match(line)
         if m:
@@ -227,11 +230,16 @@ def main():
         a.legend(fontsize=7)
         a.set_title("power draw vs limit")
         a.grid(alpha=0.3)
-    for row in ax:
+    for i, row in enumerate(ax):
         for a in row:
-            a.set_xlabel("step")
-            for xstep, gpu in incs:
-                a.axvline(xstep, color="crimson", lw=0.8, ls="--", alpha=0.6)
+            if i < 2:
+                a.set_xlabel("step")
+                for xstep, gpu in incs:
+                    a.axvline(xstep, color="crimson", lw=0.8, ls="--",
+                              alpha=0.6)
+            else:
+                a.set_xlabel("time (UTC)")
+                a.tick_params(axis="x", labelsize=6, rotation=30)
     if incs:  # annotate shapes on the val panel only (avoid clutter)
         for xstep, gpu in incs:
             ax[0][0].annotate(gpu, (xstep, ax[0][0].get_ylim()[1]),
