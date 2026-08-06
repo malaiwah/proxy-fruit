@@ -1,22 +1,57 @@
 # proxy-fruit
 
 **A documented, measured program for training serving-faithful proxy models
-on consumer and spot hardware.**
+on consumer and spot hardware.** (~$300 spot compute, ~2 days on 4×H200,
+every step rehearsed first on one RTX 5090.)
 
 This repo trains **GLM-5.2-SIQ-Fruit**: a 5B-parameter (~0.46B active)
-Mixture-of-Experts model that is a *byte-exact architectural mimic* of the
-GLM-5.2 production architecture — MLA attention (kv_lora 512, rope 64, head
-dims 192/256 preserved), DSA sparse-attention indexer (32×128, carried),
-256 routed experts + 1 shared with the sigmoid `noaux_tc` router and
-`e_score_correction_bias`, one MTP speculative-decoding layer, and the GLM
-154,880-token tokenizer.
+Mixture-of-Experts model that is an *architecture-complete mimic* of the
+GLM-5.2 production architecture. "Serving proxy" here means a **CI fixture
+for a serving/quantization stack** — distinct from the μP/DoReMi sense of
+"proxy model" (small models proxying *training dynamics*); ours proxies
+*serving behavior*. "Architecture-complete" means: same computation graph
+and serialization layout (state-dict keys, config schema, tokenizer),
+serving-critical dimensions preserved exactly, remaining dimensions scaled
+by documented rules — see the fidelity manifest below. Weights are its own.
 
-**Why:** not to compete with anything — to be an *organ donor* for a
-quantization + serving stack. A trained (not random-init) architecture-exact
-small model lets you exercise Trellis/SIQ quantization exactness, sparse-MLA
-kernels, MTP acceptance rates, chat-template stop behavior, and long-context
-paths on hardware you own, with quality signals a random-weight CI fixture
-cannot provide. Total training cost: ~$300 of spot H200 time.
+**Why train one, instead of the alternatives?**
+- *Random-init tiny fixtures* (hf-internal-testing, yujiepan's excellent
+  `*-tiny-random` zoo) validate plumbing but produce meaningless output
+  distributions — quantization error and speculative-decoding acceptance
+  aren't signals on noise, and that ecosystem typically omits the MTP
+  module and indexer entirely (documented in the cards). vLLM's own RFC
+  [#28135](https://github.com/vllm-project/vllm/issues/28135) describes the
+  resulting gap: spec-decode regressions that pass correctness tests.
+- *Synthetic acceptance rates* (e.g. Modular's `--synthetic-acceptance-rate`)
+  bypass the very code paths under test.
+- *Shearing/pruning the parent* (Sheared-LLaMA-style) inherits real weight
+  statistics but requires loading the parent (far beyond hobbyist VRAM),
+  entangles the fixture with parent weights licensing, and still needs
+  continued pretraining. From-scratch keeps the fixture clean-room.
+
+A *trained* architecture-complete mimic makes Trellis/SIQ quantization
+deltas, sparse-MLA kernel behavior, MTP acceptance, chat-template stops,
+and long-context paths all *meaningful, quality-bearing signals* on
+hardware you own.
+
+## Architecture-fidelity manifest
+
+| config key | GLM-5.2 parent | Fruit | rule |
+|---|---|---|---|
+| `kv_lora_rank` | 512 | **512** | KEPT (kernel parity) |
+| `qk_rope_head_dim` / `qk_nope_head_dim` / `v_head_dim` | 64 / 192 / 256 | **64 / 192 / 256** | KEPT (KV head_size 576 byte-exact) |
+| `n_routed_experts` / `num_experts_per_tok` / `n_shared_experts` | 256 / 8 / 1 | **256 / 8 / 1** | KEPT (router + dispatch parity) |
+| `routed_scaling_factor` | 2.5 | **2.5** | KEPT |
+| `index_n_heads` × `index_head_dim`, `index_topk` | 32×128, 2048 | **32×128, 2048** | KEPT (DSA indexer carried) |
+| `num_nextn_predict_layers` (MTP) | 1 | **1** | KEPT |
+| `first_k_dense_replace` | 3 | **3** | KEPT |
+| `vocab_size` / tokenizer | 154,880 | **154,880** | KEPT (same tokenizer files) |
+| `hidden_size` | 6144 | 1024 | scaled ÷6 |
+| `num_hidden_layers` | 78 | 13 | scaled ÷6 |
+| `num_attention_heads` | 64 | 16 | scaled ÷4 (≥8 for sparse-MLA dispatch) |
+| `q_lora_rank` | 2048 | 1024 | scaled |
+| `moe_intermediate_size` | 2048 | 512 | scaled ÷4 (tile-constraint aware) |
+| `intermediate_size` (dense) | 12288 | 2048 | scaled ÷6 |
 
 Sibling artifacts on Hugging Face:
 - [`malaiwah/GLM-5.2-SIQ-Fruit-pilot`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-pilot) — 413M pilot ("Clémentine"), serves on the real stack
@@ -44,7 +79,12 @@ Sibling artifacts on Hugging Face:
 
 Token-clock, tier-agnostic resumption (`TOKEN_BUDGET`) — schedules are
 functions of tokens seen, so a checkpoint moves between 4×H200, 8×RTX 6000
-Pro, or a single 5090 with an unbroken LR curve. `MOE_IMPL=grouped`
+Pro, or a single 5090 with an unbroken LR curve. (The token-clock *concept*
+is prior art — IBM's [Power Scheduler](https://arxiv.org/abs/2408.13359),
+WSD-family schedules, and transformers
+[#43708](https://github.com/huggingface/transformers/issues/43708)
+documents the resume bug it fixes; our contribution is the tier-agnostic
+single-file implementation, kill/resume-validated across batch sizes.) `MOE_IMPL=grouped`
 (`torch._grouped_mm`, bit-equivalent, −28% peak memory at BS=8).
 `FP8_LINEAR` (tensorwise `_scaled_mm`, loss-parity-proven). `FP32_MASTER`,
 `ZLOSS`/`ZLOSS_HEAD`, `SKIP_SPIKES`, `SNAPSHOT_SAVE`/`SNAPSHOT_FORK`
