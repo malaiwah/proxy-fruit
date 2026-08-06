@@ -60,9 +60,29 @@ if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 PASS; else
   if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 "PASS(P2P-off)"; else t T00 FAIL; fi
 fi
 
-echo "=== T01 pretrain data prep (SMOKE) ==="
-if timeout 1800 env SMOKE=1 TOK_DIR=/workspace/tokenizer OUT_DIR=/workspace/shards \
-    $PY fruit_data_prep.py 2>&1 | tail -3 | grep -a "PREP-DONE"; then t T01 PASS; else t T01 FAIL; fi
+echo "=== T01 data: pull existing shards from HF + prep ONE fresh source ==="
+# tests BOTH the resume-from-saved-shards path and fresh processing,
+# at ~3 min instead of streaming all 9 sources (~15 min)
+mkdir -p /workspace/shards
+if $PY -c "
+from huggingface_hub import hf_hub_download
+import os, shutil, json
+for f in ('spdx.u32', 'reap_calib.u32'):
+    p = hf_hub_download('malaiwah/fruit-phase1-shards', f,
+                        repo_type='dataset', token=os.environ['HF_TOKEN'])
+    shutil.copy(p, f'/workspace/shards/{f}')
+print('SHARDS-PULLED')" 2>&1 | grep -aq SHARDS-PULLED \
+   && timeout 900 env SMOKE=1 ONLY=tinystories TOK_DIR=/workspace/tokenizer \
+      OUT_DIR=/workspace/shards $PY fruit_data_prep.py 2>&1 | tail -2 | grep -aq "PREP-DONE" \
+   && $PY -c "
+import json
+m = json.load(open('/workspace/shards/manifest.json'))
+import os
+for n, w in (('spdx', 0.3), ('reap_calib', 0.3)):
+    m['weights'][n] = w
+    m['tokens'][n] = os.path.getsize(f'/workspace/shards/{n}.u32') // 4
+json.dump(m, open('/workspace/shards/manifest.json', 'w'), indent=1)
+print('MANIFEST-MERGED', m['tokens'])"; then t T01 PASS; else t T01 FAIL; fi
 
 echo "=== T02 SFT data prep (SMOKE + aider + replay) ==="
 $PY -c "

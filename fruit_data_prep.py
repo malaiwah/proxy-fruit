@@ -43,6 +43,11 @@ SOURCES = [
                                streaming=True, max_tokens=150_000_000)),
 ]
 VAL_TOKENS = 262_144       # per source, excluded from training sampling
+# ONLY=name1,name2 limits prep to those sources (single-source corpus
+# refresh; also the smoke suite's fast path)
+_only = {s for s in os.environ.get("ONLY", "").split(",") if s}
+if _only:
+    SOURCES = [s for s in SOURCES if s[0] in _only]
 
 
 LOCAL = os.environ.get("LOCAL_CORPUS_DIR", "")

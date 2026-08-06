@@ -28,7 +28,7 @@ then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
 | # | Test | Validates | ~time |
 |---|---|---|---|
 | T00 | GPU acceptance ritual | `nvidia-smi topo -m`, torch sees 4×sm120, 30 s DDP all-reduce sanity (NCCL on PCIe; fallback `NCCL_P2P_DISABLE=1`) | 3 min |
-| T01 | Pretrain data prep (SMOKE) | all 9 sources stream+tokenize, manifest | 15 min |
+| T01 | Data: HF shard pull + one fresh source | resume-from-saved-shards path AND fresh tokenization (ONLY= filter), merged manifest | 4 min |
 | T02 | SFT data prep (SMOKE) | chat-template masks, starts index, aider jsonl ingestion, replay symlinks + manifest | 8 min |
 | T03 | Baseline DDP train + push | stacked MoE, legacy step clock, 4-rank DDP, atomic saves, hardlink push to fruit-smoke | 5 min |
 | T04 | grouped ≡ stacked | `MOE_IMPL` equivalence on deterministic data (loss diff < 0.02) | 5 min |
