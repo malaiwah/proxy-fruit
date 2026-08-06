@@ -54,6 +54,8 @@ torch.cuda.synchronize()
 if r == 0: print(f"ALLREDUCE-OK {10*2*3*256/ (time.time()-t0)/1024:.1f} GB/s busbw-ish")
 dist.destroy_process_group()
 EOF
+NCCL_MIN_NCHANNELS=8 NCCL_P2P_LEVEL=SYS NCCL_BUFFSIZE=33554432 \
+  timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK | sed 's/^/tuned: /' || true
 if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 PASS; else
   export NCCL_P2P_DISABLE=1
   if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 "PASS(P2P-off)"; else t T00 FAIL; fi
@@ -115,8 +117,11 @@ rm -f /workspace/out/smoke5_ckpt.pt
 if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke5 \
     BIAS_BALANCE=0.001 AUX_COEF=0.0001 ZLOSS_HEAD=1e-4 NO_WD_EMB=1 TIE_EMB=1 \
     LR_SCHED=wsd WARMUP=20 MTP_W=0.3 MTP_W_END=0.1 SKIP_SPIKES=1 \
-    DETERMINISTIC_DATA=1 $TR train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then
-  t T05 PASS; else t T05 FAIL; fi
+    DETERMINISTIC_DATA=1 $TR train_fruit.py 2>&1 | tee /tmp/t05.log | tail -2 | grep -aq TRAIN-DONE; then
+  L0=$(grep -aoE "^\[0/[0-9]+\] loss [0-9.]+" /tmp/t05.log | grep -aoE "[0-9.]+$")
+  if $PY -c "exit(0 if float('${L0:-999}') < 20 else 1)"; then t T05 "PASS(l0=$L0)";
+  else t T05 "FAIL(tie-init l0=$L0)"; fi
+  else t T05 FAIL; fi
 
 echo "=== T06 FP8_LINEAR ==="
 rm -f /workspace/out/smoke6_ckpt.pt
@@ -210,6 +215,22 @@ if grep -aq "\[incarnation\]" /tmp/node_lines.txt \
    && env NODE_LINES=/tmp/node_lines.txt WORK=/tmp REPO=malaiwah/fruit-smoke \
       PLOT_TITLE="fruit-smoke suite" $PY progress_publish.py 2>&1 | grep -aq PROGRESS-PUBLISHED; then
   t T17 PASS; else t T17 FAIL; fi
+
+echo "=== T18 deterministic-data repeat (bit-level data order) ==="
+rm -f /workspace/out/smoke18_ckpt.pt
+timeout 400 env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
+  SAVE_NAME=smoke18x CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t18a.log 2>&1
+rm -f /workspace/out/smoke18x_ckpt.pt
+timeout 400 env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
+  SAVE_NAME=smoke18x CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t18b.log 2>&1
+A=$(last_loss /tmp/t18a.log); B=$(last_loss /tmp/t18b.log)
+if [ -n "$A" ] && [ "$A" = "$B" ]; then t T18 "PASS($A)"; else t T18 "FAIL($A vs $B)"; fi
+
+echo "=== T19 guarded compile path (COMPILE=1, no grad-ckpt) ==="
+rm -f /workspace/out/smoke19_ckpt.pt
+if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=25 SAVE_NAME=smoke19 \
+    COMPILE=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then
+  t T19 PASS; else t T19 FAIL; fi
 
 echo ""
 echo "=========== SMOKE SUITE SUMMARY ==========="

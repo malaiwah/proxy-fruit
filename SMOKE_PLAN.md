@@ -32,7 +32,7 @@ then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
 | T02 | SFT data prep (SMOKE) | chat-template masks, starts index, aider jsonl ingestion, replay symlinks + manifest | 8 min |
 | T03 | Baseline DDP train + push | stacked MoE, legacy step clock, 4-rank DDP, atomic saves, hardlink push to fruit-smoke | 5 min |
 | T04 | grouped ≡ stacked | `MOE_IMPL` equivalence on deterministic data (loss diff < 0.02) | 5 min |
-| T05 | Run-2 bundle | WSD+TIE+NO_WD_EMB+ZLOSS_HEAD+BIAS_BALANCE+AUX_COEF+MTP_W decay+SKIP_SPIKES together | 4 min |
+| T05 | Run-2 bundle | as left + step-0 loss < 20 assertion (tie-init explosion regression guard) | 4 min |
 | T06 | FP8_LINEAR | `_scaled_mm` fwd/bwd runs, finite loss | 3 min |
 | T07 | SFT masked train | masks active, replay channel, conv-aligned sampling, loss falls | 4 min |
 | T08 | INTRADOC_MASK | block-diagonal attention path | 3 min |
@@ -45,6 +45,8 @@ then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
 | T15 | HF recovery | delete local ckpt, restore from fruit-smoke, resume | 4 min |
 | T16 | probe_ckpt | separate-process load, generations, router census | 4 min |
 | T17 | Ledger publish | incarnation banners parsed, merged ledger + plot uploaded to fruit-smoke | 3 min |
+| T18 | Determinism repeat | DETERMINISTIC_DATA gives identical loss sequences across runs | 3 min |
+| T19 | Guarded compile path | COMPILE=1 (no grad-ckpt) trains to completion | 5 min |
 
 Executor prints `TEST Txx PASS|FAIL` per test and a final summary block;
 any FAIL = the toolchain change is not cleared for paid runs.
