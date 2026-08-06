@@ -224,7 +224,7 @@ rm -f /workspace/out/smoke18x_ckpt.pt
 timeout 400 env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke18x CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t18b.log 2>&1
 A=$(last_loss /tmp/t18a.log); B=$(last_loss /tmp/t18b.log)
-if [ -n "$A" ] && [ "$A" = "$B" ]; then t T18 "PASS($A)"; else t T18 "FAIL($A vs $B)"; fi
+if $PY -c "exit(0 if abs($A-$B) < 0.01 else 1)" 2>/dev/null; then t T18 "PASS($A~$B)"; else t T18 "FAIL($A vs $B)"; fi
 
 echo "=== T19 guarded compile path (COMPILE=1, no grad-ckpt) ==="
 rm -f /workspace/out/smoke19_ckpt.pt

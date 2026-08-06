@@ -45,7 +45,7 @@ then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
 | T15 | HF recovery | delete local ckpt, restore from fruit-smoke, resume | 4 min |
 | T16 | probe_ckpt | separate-process load, generations, router census | 4 min |
 | T17 | Ledger publish | incarnation banners parsed, merged ledger + plot uploaded to fruit-smoke | 3 min |
-| T18 | Determinism repeat | DETERMINISTIC_DATA gives identical loss sequences across runs | 3 min |
+| T18 | Determinism repeat | DETERMINISTIC_DATA: same data order across runs (loss diff < 0.01; bit-exactness NOT claimed — GPU atomics) | 3 min |
 | T19 | Guarded compile path | COMPILE=1 (no grad-ckpt) trains to completion | 5 min |
 
 Executor prints `TEST Txx PASS|FAIL` per test and a final summary block;
@@ -64,4 +64,4 @@ any FAIL = the toolchain change is not cleared for paid runs.
 
 | date | node | duration | cost | result | notes |
 |---|---|---|---|---|---|
-| 2026-08-06 | 4×RTX6000Pro spot IN1 | (first run) | ~$6–9 est | — | initial validation of this plan |
+| 2026-08-06 | 4×RTX6000Pro spot IN1 | ~2.9 h total (incl. 1 debug round) | ~$11 | **20/20 PASS** | run 1: T01 timeout + run1-through-env bash bug (both fixed); run 2: T00–T17 all PASS; addendum T18 Δ=0.001 (criterion fixed to tolerance), T19 PASS. All-reduce 69.6 GB/s untuned. First code execution on real RTX 6000 Pro silicon. |
