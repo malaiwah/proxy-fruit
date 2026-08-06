@@ -15,10 +15,10 @@ cp /workspace/train_fruit_v2.py /workspace/train_fruit.py  # deploy new trainer
 TR="/workspace/venv/bin/torchrun --standalone --max-restarts=3 --nproc_per_node=4"
 export GEO_H=1024 GEO_NL=13 GEO_HEADS=16 GEO_QLORA=1024 \
        GEO_DENSE_INTER=2048 GEO_MOE_INTER=512 \
-       TOK_DIR=/workspace/tokenizer ROPE_THETA=500000 MOE_IMPL=stacked \
+       TOK_DIR=/workspace/tokenizer ROPE_THETA=500000 MOE_IMPL=grouped \
        HF_PUSH_REPO=malaiwah/fruit-phase1-ckpt PUSH_EVERY=600 \
        EVAL_EVERY=1000 FRUIT_OUT_DIR=/workspace/out \
-       PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OPT_8BIT=1
+       PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OPT_8BIT=1 FP32_MASTER=1
 
 up() {  # upload a stage artifact to final/
   $PY - "$1" <<'EOF'
