@@ -1,7 +1,21 @@
 # Smoke-test plan — full pipeline regression suite
 
 Run this after ANY substantive change to the toolchain, before trusting it
-on a paid training run. Two tiers:
+on a paid training run. Cost-tiered — pick by what changed:
+
+- **TIER=0** (single-GPU tests, **$0**, home RTX 5090): every toolchain
+  change. 15 tests, ~35 min.
+- **TIER=1** (multi-GPU tests only, 2x RTX 6000 Pro spot, ~20 min,
+  **~$0.70**): changes touching DDP/distributed/checkpoint-transport code.
+- **TIER=full** (4x node, ~45 min, **~$4**): before any paid training run.
+
+Cost killers: use a persistent Jarvis filesystem (`jl filesystem`) holding
+venv+tokenizer+smoke shards (bootstrap 10 min -> seconds, pennies/month),
+or keep a paused smoke sidecar instance. Coverage-per-dollar: golden-loss
+drift checks on deterministic tests catch silent numeric regressions at
+zero runtime cost.
+
+Legacy two-tier note:
 
 - **Rental tier** (this doc's executor: `smoke_all.sh`) — one 4× RTX 6000
   Pro Blackwell spot node (sm120, ~$3.96/h spot). Exercises the *training*
