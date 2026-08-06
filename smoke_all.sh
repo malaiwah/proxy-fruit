@@ -25,6 +25,7 @@ want() {
 }
 
 echo "=== bootstrap ==="
+if [ "${SKIP_BOOTSTRAP:-}" = "1" ]; then echo "bootstrap skipped (home container)"; else
 apt-get update -qq >/dev/null 2>&1 || true
 apt-get install -y -qq python3-venv python3-pip >/dev/null 2>&1 || true
 [ -x "$PY" ] || python3 -m venv /workspace/venv
@@ -35,6 +36,7 @@ echo "driver CUDA $CUV -> torch $IDX"
 $PY -m pip install -q torch numpy datasets transformers huggingface_hub \
   bitsandbytes matplotlib --extra-index-url "https://download.pytorch.org/whl/$IDX" 2>&1 | tail -1
 $PY -c "import torch; assert torch.cuda.is_available(); print('torch', torch.__version__, torch.cuda.get_device_name(0), 'x', torch.cuda.device_count())"
+fi
 $PY - <<'EOF'
 from huggingface_hub import hf_hub_download
 import os
@@ -133,6 +135,12 @@ timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke4b MOE_IMPL=grouped CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t04b.log 2>&1
 A=$(last_loss /tmp/t04a.log); B=$(last_loss /tmp/t04b.log)
 if $PY -c "exit(0 if abs($A-$B) < 0.02 else 1)" 2>/dev/null; then t T04 "PASS($A~$B)"; else t T04 "FAIL($A vs $B)"; fi
+[ -f smoke_goldens.env ] && . smoke_goldens.env
+if [ -n "${T04_GOLDEN:-}" ]; then
+  $PY -c "exit(0 if abs($A-$T04_GOLDEN) < 0.15 else 1)" 2>/dev/null \
+    && echo "GOLDEN T04 OK ($A vs $T04_GOLDEN)" \
+    || echo "GOLDEN T04 DRIFT ($A vs $T04_GOLDEN) — silent numeric change?"
+fi
 else t T04 "SKIP(tier)"; fi
 
 if want T05; then
@@ -284,6 +292,24 @@ if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=25 SAVE_NAME=smoke19 \
     COMPILE=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then
   t T19 PASS; else t T19 FAIL; fi
 else t T19 "SKIP(tier)"; fi
+
+echo "=== T20 log hygiene (nan/inf/traceback sweep) ==="
+if want T20; then
+if grep -alE "loss (nan|inf)|RuntimeError|Traceback" /tmp/t0*.log /tmp/t1*.log 2>/dev/null \
+   | grep -av t13a | grep -aq .; then t T20 "FAIL(dirty logs)"; else t T20 PASS; fi
+else t T20 "SKIP(tier)"; fi
+
+echo "=== T21 corrupted checkpoint -> clean error ==="
+if want T21; then
+head -c 100000 /workspace/out/smoke3_ckpt.pt > /workspace/out/smoke21_ckpt.pt 2>/dev/null
+if timeout 240 env SHARD_DIR=/workspace/shards BS=4 STEPS=5 SAVE_NAME=smoke21 \
+    CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t21.log 2>&1; then
+  t T21 "FAIL(no error on corrupt ckpt)"
+else
+  grep -aqE "Error|error" /tmp/t21.log && t T21 PASS || t T21 "FAIL(died silently)"
+fi
+rm -f /workspace/out/smoke21_ckpt.pt
+else t T21 "SKIP(tier)"; fi
 
 echo ""
 echo "=========== SMOKE SUITE SUMMARY ==========="

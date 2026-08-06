@@ -61,6 +61,10 @@ then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
 | T17 | Ledger publish | incarnation banners parsed, merged ledger + plot uploaded to fruit-smoke | 3 min |
 | T18 | Determinism repeat | DETERMINISTIC_DATA: same data order across runs (loss diff < 0.01; bit-exactness NOT claimed — GPU atomics) | 3 min |
 | T19 | Guarded compile path | COMPILE=1 (no grad-ckpt) trains to completion | 5 min |
+| T20 | Log hygiene | no nan/inf/Traceback in any test log | <1 min |
+| T21 | Corrupted checkpoint | truncated ckpt -> clean error, no hang | 2 min |
+
+Golden-loss drift checks (smoke_goldens.env) flag silent numeric changes on deterministic tests (informational, tolerance 0.15).
 
 Executor prints `TEST Txx PASS|FAIL` per test and a final summary block;
 any FAIL = the toolchain change is not cleared for paid runs.
