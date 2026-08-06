@@ -15,6 +15,7 @@ t() { RESULTS+=("$1 $2"); echo "TEST $1 $2"; }
 # TIER=1: multi-GPU tests only (cheap 2x rental, ~20 min, ~$0.70)
 # TIER=full (default): everything (pre-paid-run rehearsal)
 TIER=${TIER:-full}
+TSCALE=${TSCALE:-1}   # timeout multiplier for slow tiers (home/NFS: 3)
 MULTI=" T00 T03 T05 T10 T17 "
 want() {
   case "$TIER" in
@@ -56,8 +57,8 @@ last_loss() { grep -aE "^\[[0-9]+/" "$1" | tail -1 | grep -aoE "loss [0-9.]+" | 
 if want T00; then
 echo "=== T00 GPU acceptance ==="
 nvidia-smi topo -m | head -8
-if timeout 120 $TR --no-python true 2>/dev/null || true; then :; fi
-timeout 180 $TR -m torch.distributed.run 2>/dev/null || true
+if timeout $(( 120 * TSCALE )) $TR --no-python true 2>/dev/null || true; then :; fi
+timeout $(( 180 * TSCALE )) $TR -m torch.distributed.run 2>/dev/null || true
 cat > /tmp/ar.py <<'EOF'
 import torch, torch.distributed as dist, os, time
 dist.init_process_group('nccl'); r = dist.get_rank()
@@ -71,10 +72,10 @@ if r == 0: print(f"ALLREDUCE-OK {10*2*3*256/ (time.time()-t0)/1024:.1f} GB/s bus
 dist.destroy_process_group()
 EOF
 NCCL_MIN_NCHANNELS=8 NCCL_P2P_LEVEL=SYS NCCL_BUFFSIZE=33554432 \
-  timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK | sed 's/^/tuned: /' || true
-if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 PASS; else
+  timeout $(( 240 * TSCALE )) $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK | sed 's/^/tuned: /' || true
+if timeout $(( 240 * TSCALE )) $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 PASS; else
   export NCCL_P2P_DISABLE=1
-  if timeout 240 $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 "PASS(P2P-off)"; else t T00 FAIL; fi
+  if timeout $(( 240 * TSCALE )) $TR /tmp/ar.py 2>&1 | grep -a ALLREDUCE-OK; then t T00 "PASS(P2P-off)"; else t T00 FAIL; fi
 fi
 else t T00 "SKIP(tier)"; fi
 
@@ -91,7 +92,7 @@ for f in ('spdx.u32', 'reap_calib.u32'):
                         repo_type='dataset', token=os.environ['HF_TOKEN'])
     shutil.copy(p, f'/workspace/shards/{f}')
 print('SHARDS-PULLED')" 2>&1 | grep -aq SHARDS-PULLED \
-   && timeout 900 env SMOKE=1 ONLY=tinystories TOK_DIR=/workspace/tokenizer \
+   && timeout $(( 900 * TSCALE )) env SMOKE=1 ONLY=tinystories TOK_DIR=/workspace/tokenizer \
       OUT_DIR=/workspace/shards $PY fruit_data_prep.py 2>&1 | tail -2 | grep -aq "PREP-DONE" \
    && $PY -c "
 import json
@@ -112,7 +113,7 @@ import shutil, os
 p = hf_hub_download('malaiwah/fruit-phase1-shards', 'sft/sft-aider.jsonl',
                     repo_type='dataset', token=os.environ['HF_TOKEN'])
 shutil.copy(p, '/workspace/sft-aider.jsonl')" || true
-if timeout 1200 env SMOKE=1 TOK_DIR=/workspace/tokenizer OUT_DIR=/workspace/sft-shards \
+if timeout $(( 1200 * TSCALE )) env SMOKE=1 TOK_DIR=/workspace/tokenizer OUT_DIR=/workspace/sft-shards \
     AIDER_JSONL=/workspace/sft-aider.jsonl $PY sft_data_prep.py 2>&1 | tail -2 | grep -a "SFT-PREP-DONE" \
    && $PY finish_sft_manifest.py 2>&1 | grep -a MANIFEST; then t T02 PASS; else t T02 FAIL; fi
 else t T02 "SKIP(tier)"; fi
@@ -120,7 +121,7 @@ else t T02 "SKIP(tier)"; fi
 if want T03; then
 echo "=== T03 baseline DDP train + push ==="
 rm -f /workspace/out/smoke3_ckpt.pt
-if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke3 \
+if timeout $(( 900 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke3 \
     HF_PUSH_REPO=malaiwah/fruit-smoke PUSH_EVERY=100 $TR train_fruit.py 2>&1 \
     | tee /tmp/t03.log | grep -aE "push\] step|TRAIN-DONE" | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "\[push\] step" /tmp/t03.log; then t T03 PASS; else t T03 FAIL; fi
@@ -129,9 +130,9 @@ else t T03 "SKIP(tier)"; fi
 if want T04; then
 echo "=== T04 grouped == stacked (deterministic) ==="
 rm -f /workspace/out/smoke4a_ckpt.pt /workspace/out/smoke4b_ckpt.pt
-timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
+timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke4a MOE_IMPL=stacked CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t04a.log 2>&1
-timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
+timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=60 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke4b MOE_IMPL=grouped CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t04b.log 2>&1
 A=$(last_loss /tmp/t04a.log); B=$(last_loss /tmp/t04b.log)
 if $PY -c "exit(0 if abs($A-$B) < 0.02 else 1)" 2>/dev/null; then t T04 "PASS($A~$B)"; else t T04 "FAIL($A vs $B)"; fi
@@ -146,7 +147,7 @@ else t T04 "SKIP(tier)"; fi
 if want T05; then
 echo "=== T05 run-2 bundle ==="
 rm -f /workspace/out/smoke5_ckpt.pt
-if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke5 \
+if timeout $(( 900 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=120 SAVE_NAME=smoke5 \
     BIAS_BALANCE=0.001 AUX_COEF=0.0001 ZLOSS_HEAD=1e-4 NO_WD_EMB=1 TIE_EMB=1 \
     LR_SCHED=wsd WARMUP=20 MTP_W=0.3 MTP_W_END=0.1 SKIP_SPIKES=1 \
     DETERMINISTIC_DATA=1 $TR train_fruit.py 2>&1 | tee /tmp/t05.log | tail -2 | grep -aq TRAIN-DONE; then
@@ -159,14 +160,14 @@ else t T05 "SKIP(tier)"; fi
 if want T06; then
 echo "=== T06 FP8_LINEAR ==="
 rm -f /workspace/out/smoke6_ckpt.pt
-if timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke6 \
+if timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke6 \
     FP8_LINEAR=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T06 PASS; else t T06 FAIL; fi
 else t T06 "SKIP(tier)"; fi
 
 if want T07; then
 echo "=== T07 SFT masked train ==="
 rm -f /workspace/out/smoke7_ckpt.pt
-if timeout 600 env SHARD_DIR=/workspace/sft-shards BS=8 STEPS=80 SAVE_NAME=smoke7 \
+if timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/sft-shards BS=8 STEPS=80 SAVE_NAME=smoke7 \
     MTP_W=0.1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t07.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "SFT loss masks active" /tmp/t07.log; then t T07 PASS; else t T07 FAIL; fi
 else t T07 "SKIP(tier)"; fi
@@ -174,25 +175,25 @@ else t T07 "SKIP(tier)"; fi
 if want T08; then
 echo "=== T08 INTRADOC_MASK ==="
 rm -f /workspace/out/smoke8_ckpt.pt
-if timeout 600 env SHARD_DIR=/workspace/sft-shards BS=4 STEPS=40 SAVE_NAME=smoke8 \
+if timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/sft-shards BS=4 STEPS=40 SAVE_NAME=smoke8 \
     INTRADOC_MASK=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T08 PASS; else t T08 FAIL; fi
 else t T08 "SKIP(tier)"; fi
 
 if want T09; then
 echo "=== T09 QNOISE ==="
 rm -f /workspace/out/smoke9_ckpt.pt
-if timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke9 \
+if timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=40 SAVE_NAME=smoke9 \
     QNOISE=0.015 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then t T09 PASS; else t T09 FAIL; fi
 else t T09 "SKIP(tier)"; fi
 
 if want T10; then
 echo "=== T10 token-clock tier hop (4 ranks -> 1 rank) ==="
 rm -f /workspace/out/smoke10_ckpt.pt
-timeout --signal=KILL 75 env SHARD_DIR=/workspace/shards BS=4 STEPS=999999 \
+timeout --signal=KILL $(( 75 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=999999 \
   TOKEN_BUDGET=3000000 WARMUP=20 SAVE_NAME=smoke10 DETERMINISTIC_DATA=1 \
   $TR train_fruit.py > /tmp/t10a.log 2>&1 || true
 sleep 3; pkill -f train_fruit.py 2>/dev/null; sleep 3
-if timeout 900 env SHARD_DIR=/workspace/shards BS=8 STEPS=999999 \
+if timeout $(( 900 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=999999 \
     TOKEN_BUDGET=3000000 WARMUP=20 SAVE_NAME=smoke10 DETERMINISTIC_DATA=1 \
     CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t10b.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "\[resume\]" /tmp/t10b.log && grep -aq "\[tokens\]" /tmp/t10b.log; then
@@ -204,7 +205,14 @@ echo "=== T11 SIGTERM drill ==="
 rm -f /workspace/out/smoke11_ckpt.pt
 env SHARD_DIR=/workspace/shards BS=8 STEPS=5000 SAVE_NAME=smoke11 \
   CUDA_VISIBLE_DEVICES=0 nohup $PY train_fruit.py > /tmp/t11.log 2>&1 &
-TP=$!; sleep 60; kill -TERM $TP; sleep 25
+TP=$!
+for i in $(seq 1 $(( 40 * TSCALE ))); do
+  grep -aqE "^\[[0-9]+/" /tmp/t11.log && break; sleep 5
+done
+sleep 10; kill -TERM $TP
+for i in $(seq 1 $(( 12 * TSCALE ))); do
+  grep -aq "sigterm" /tmp/t11.log && break; sleep 5
+done
 if grep -aq "\[sigterm\] snapshot" /tmp/t11.log; then t T11 PASS; else t T11 FAIL; fi
 pkill -f train_fruit.py 2>/dev/null; sleep 3
 else t T11 "SKIP(tier)"; fi
@@ -212,7 +220,7 @@ else t T11 "SKIP(tier)"; fi
 if want T12; then
 echo "=== T12 SNAPSHOT_FORK + push ==="
 rm -f /workspace/out/smoke12_ckpt.pt
-if timeout 900 env SHARD_DIR=/workspace/shards BS=8 STEPS=130 SAVE_NAME=smoke12 \
+if timeout $(( 900 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=130 SAVE_NAME=smoke12 \
     SNAPSHOT_SAVE=1 SNAPSHOT_FORK=1 HF_PUSH_REPO=malaiwah/fruit-smoke \
     PUSH_EVERY=60 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t12.log | tail -2 | grep -aq TRAIN-DONE \
    && grep -aq "\[snap\] paused" /tmp/t12.log; then t T12 PASS; else t T12 FAIL; fi
@@ -221,12 +229,12 @@ else t T12 "SKIP(tier)"; fi
 if want T13; then
 echo "=== T13 FP32_MASTER + paged + resume continuity ==="
 rm -f /workspace/out/smoke13_ckpt.pt
-timeout --signal=KILL 80 env SHARD_DIR=/workspace/shards BS=8 STEPS=5000 \
+timeout --signal=KILL $(( 80 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=5000 \
   SAVE_NAME=smoke13 FP32_MASTER=1 OPT_8BIT=paged CUDA_VISIBLE_DEVICES=0 \
   $PY train_fruit.py > /tmp/t13a.log 2>&1 || true
 pkill -f train_fruit.py 2>/dev/null; sleep 3
 PRE=$(last_loss /tmp/t13a.log)
-timeout 600 env SHARD_DIR=/workspace/shards BS=8 STEPS=$(( $(grep -aoE "^\[[0-9]+/" /tmp/t13a.log | tail -1 | tr -d '[/') + 40 )) \
+timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=$(( $(grep -aoE "^\[[0-9]+/" /tmp/t13a.log | tail -1 | tr -d '[/') + 40 )) \
   SAVE_NAME=smoke13 FP32_MASTER=1 OPT_8BIT=paged CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t13b.log 2>&1 || true
 POST=$(last_loss /tmp/t13b.log)
 if $PY -c "exit(0 if float($POST) < float($PRE)*1.5 + 1 else 1)" 2>/dev/null \
@@ -236,7 +244,7 @@ else t T13 "SKIP(tier)"; fi
 if want T14; then
 echo "=== T14 INDEXER_DISTILL ==="
 rm -f /workspace/out/smoke14_ckpt.pt
-if timeout 600 env SHARD_DIR=/workspace/shards BS=4 STEPS=80 SEQ=512 \
+if timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=80 SEQ=512 \
     SAVE_NAME=smoke14 INDEXER_DISTILL=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t14.log \
     | tail -2 | grep -aq TRAIN-DONE && grep -aq "distill\] kl" /tmp/t14.log; then
   t T14 PASS; else t T14 FAIL; fi
@@ -251,14 +259,14 @@ import os, shutil
 p = hf_hub_download('malaiwah/fruit-smoke', 'checkpoints/smoke3_ckpt.pt',
                     token=os.environ['HF_TOKEN'])
 shutil.copy(p, '/workspace/out/smoke3_ckpt.pt'); print('PULLED')" 2>&1 | grep -aq PULLED \
-   && timeout 600 env SHARD_DIR=/workspace/shards BS=4 STEPS=140 SAVE_NAME=smoke3 \
+   && timeout $(( 600 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=140 SAVE_NAME=smoke3 \
       CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tee /tmp/t15.log | grep -aq TRAIN-DONE \
    && grep -aq "\[resume\]" /tmp/t15.log; then t T15 PASS; else t T15 FAIL; fi
 else t T15 "SKIP(tier)"; fi
 
 if want T16; then
 echo "=== T16 probe_ckpt ==="
-if timeout 600 env CKPT=/workspace/out/smoke3_ckpt.pt TOK_DIR=/workspace/tokenizer \
+if timeout $(( 600 * TSCALE )) env CKPT=/workspace/out/smoke3_ckpt.pt TOK_DIR=/workspace/tokenizer \
     CUDA_VISIBLE_DEVICES=0 $PY probe_ckpt.py 2>&1 | tail -3 | grep -aq PROBE-DONE; then
   t T16 PASS; else t T16 FAIL; fi
 else t T16 "SKIP(tier)"; fi
@@ -276,10 +284,10 @@ else t T17 "SKIP(tier)"; fi
 if want T18; then
 echo "=== T18 deterministic-data repeat (bit-level data order) ==="
 rm -f /workspace/out/smoke18_ckpt.pt
-timeout 400 env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
+timeout $(( 400 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke18x CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t18a.log 2>&1
 rm -f /workspace/out/smoke18x_ckpt.pt
-timeout 400 env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
+timeout $(( 400 * TSCALE )) env SHARD_DIR=/workspace/shards BS=8 STEPS=30 DETERMINISTIC_DATA=1 \
   SAVE_NAME=smoke18x CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t18b.log 2>&1
 A=$(last_loss /tmp/t18a.log); B=$(last_loss /tmp/t18b.log)
 if $PY -c "exit(0 if abs($A-$B) < 0.01 else 1)" 2>/dev/null; then t T18 "PASS($A~$B)"; else t T18 "FAIL($A vs $B)"; fi
@@ -288,7 +296,7 @@ else t T18 "SKIP(tier)"; fi
 if want T19; then
 echo "=== T19 guarded compile path (COMPILE=1, no grad-ckpt) ==="
 rm -f /workspace/out/smoke19_ckpt.pt
-if timeout 900 env SHARD_DIR=/workspace/shards BS=4 STEPS=25 SAVE_NAME=smoke19 \
+if timeout $(( 900 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=25 SAVE_NAME=smoke19 \
     COMPILE=1 CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py 2>&1 | tail -2 | grep -aq TRAIN-DONE; then
   t T19 PASS; else t T19 FAIL; fi
 else t T19 "SKIP(tier)"; fi
@@ -302,7 +310,7 @@ else t T20 "SKIP(tier)"; fi
 echo "=== T21 corrupted checkpoint -> clean error ==="
 if want T21; then
 head -c 100000 /workspace/out/smoke3_ckpt.pt > /workspace/out/smoke21_ckpt.pt 2>/dev/null
-if timeout 240 env SHARD_DIR=/workspace/shards BS=4 STEPS=5 SAVE_NAME=smoke21 \
+if timeout $(( 240 * TSCALE )) env SHARD_DIR=/workspace/shards BS=4 STEPS=5 SAVE_NAME=smoke21 \
     CUDA_VISIBLE_DEVICES=0 $PY train_fruit.py > /tmp/t21.log 2>&1; then
   t T21 "FAIL(no error on corrupt ckpt)"
 else
