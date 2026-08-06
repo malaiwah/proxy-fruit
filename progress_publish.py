@@ -116,7 +116,8 @@ def main():
             steps["lr"].append(float(m.group(6)))
             steps["sps"].append(float(m.group(7)))
 
-    nrows = 3 if telem else 2
+    has_throttle = telem and telem.get("gpuclk")
+    nrows = (4 if has_throttle else 3) if telem else 2
     fig, ax = plt.subplots(nrows, 2, figsize=(13, 4.25 * nrows), dpi=120)
     a = ax[0][0]
     for k in sorted(vals):
@@ -196,6 +197,35 @@ def main():
         a.legend(fontsize=7, loc="upper left")
         a2.legend(fontsize=7, loc="upper right")
         a.set_title("host CPU / RAM / network")
+        a.grid(alpha=0.3)
+    if has_throttle:
+        a = ax[3][0]
+        for k, c in (("gpuclk", "tab:green"), ("memclk", "tab:olive"),
+                     ("cpumhz", "tab:gray")):
+            x, y = tl(k)
+            if x:
+                a.plot(x, y, lw=0.9, color=c, label=f"{k} MHz")
+        a.set_ylabel("MHz")
+        a2 = a.twinx()
+        for k, c in (("gputemp", "tab:red"), ("cputemp", "tab:orange")):
+            x, y = tl(k)
+            if x and max(y) > 0:
+                a2.plot(x, y, lw=0.9, ls=":", color=c, label=f"{k} °C")
+        a2.set_ylabel("°C")
+        a.legend(fontsize=7, loc="upper left")
+        a2.legend(fontsize=7, loc="upper right")
+        a.set_title("clocks + temps (throttle forensics)")
+        a.grid(alpha=0.3)
+        a = ax[3][1]
+        x, y = tl("pdraw")
+        a.plot(x, y, lw=1.1, color="tab:red", label="power draw W (sum)")
+        x, y = tl("plim")
+        if x:
+            a.plot(x, y, lw=1.0, ls="--", color="black",
+                   label="power limit W (sum)")
+        a.set_ylabel("W")
+        a.legend(fontsize=7)
+        a.set_title("power draw vs limit")
         a.grid(alpha=0.3)
     for row in ax:
         for a in row:
