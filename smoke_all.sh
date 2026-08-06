@@ -7,7 +7,8 @@ cd /workspace
 export PYTHONUNBUFFERED=1
 : "${HF_TOKEN:?export HF_TOKEN first}"
 PY=/workspace/venv/bin/python3
-TR="/workspace/venv/bin/torchrun --standalone --nproc_per_node=4"
+NPROC=${NPROC:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+TR="/workspace/venv/bin/torchrun --standalone --nproc_per_node=$NPROC"
 RESULTS=()
 t() { RESULTS+=("$1 $2"); echo "TEST $1 $2"; }
 # TIER=0: single-GPU tests only (free on the home 5090)
