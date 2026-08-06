@@ -763,6 +763,18 @@ def main():
         with torch.no_grad():
             for m, p in zip(masters, trainable):
                 m.copy_(p.detach().float())
+    if is_main:
+        # incarnation banner: one ledger line per trainer start identifying
+        # node + shape — the additive provenance record across preemptions
+        # and tier changes (plotted as vertical markers)
+        import socket
+        from datetime import datetime, timezone
+        gpu = torch.cuda.get_device_name(0).replace(" ", "_")
+        print(f"[incarnation] step={start} tokens={tok_state['seen']} "
+              f"host={socket.gethostname()} gpu={gpu}x{world} bs={bs} "
+              f"seq={SEQ} tps={tps} "
+              f"time={datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+              flush=True)
     if TOKEN_BUDGET:
         steps = start + max(0, math.ceil(
             (TOKEN_BUDGET - tok_state["seen"]) / tps))

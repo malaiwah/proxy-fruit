@@ -28,6 +28,8 @@ VAL_RE = re.compile(r"^\[val (\d+)\] (.*)")
 STEP_RE = re.compile(
     r"^\[(\d+)/\d+\] loss ([\d.]+) mtp ([\d.]+) aux ([\d.]+)"
     r"(?: gnorm ([\d.]+))? lr ([\d.e+-]+) ([\d.]+)s/step")
+INC_RE = re.compile(r"^\[incarnation\] step=(\d+) .*?gpu=(\S+) .*?"
+                    r"time=(\S+)")
 KV = re.compile(r"(\w+)=([\d.]+)")
 
 
@@ -38,6 +40,9 @@ def parse_key(line):
     m = STEP_RE.match(line)
     if m:
         return ("step", int(m.group(1)))
+    m = INC_RE.match(line)
+    if m:  # additive: unique per start event (keyed by timestamp)
+        return ("inc", m.group(3))
     return None
 
 
@@ -69,13 +74,21 @@ def main():
             merged[k] = line.strip()
             n_node += 1
     print(f"[merge] +{n_node} node lines -> {len(merged)} total", flush=True)
-    lines = [merged[k] for k in sorted(merged, key=lambda k: (k[1], k[0]))]
+    lines = [merged[k] for k in
+             sorted(merged, key=lambda k: (str(k[1]), k[0]))]
+    lines.sort(key=lambda ln: (int((VAL_RE.match(ln) or STEP_RE.match(ln)
+                                    or INC_RE.match(ln)).group(1))))
     logp = os.path.join(WORK, "train_metrics.log")
     open(logp, "w").write("\n".join(lines) + "\n")
 
+    incs = []
     vals, steps = {}, {"step": [], "loss": [], "mtp": [], "aux": [],
                        "gnorm": [], "lr": [], "sps": []}
     for line in lines:
+        m = INC_RE.match(line)
+        if m:
+            incs.append((int(m.group(1)), m.group(2)))
+            continue
         m = VAL_RE.match(line)
         if m:
             for k, v in KV.findall(m.group(2)):
@@ -144,6 +157,13 @@ def main():
     for row in ax:
         for a in row:
             a.set_xlabel("step")
+            for xstep, gpu in incs:
+                a.axvline(xstep, color="crimson", lw=0.8, ls="--", alpha=0.6)
+    if incs:  # annotate shapes on the val panel only (avoid clutter)
+        for xstep, gpu in incs:
+            ax[0][0].annotate(gpu, (xstep, ax[0][0].get_ylim()[1]),
+                              rotation=90, fontsize=6, va="top",
+                              color="crimson", alpha=0.8)
     fig.suptitle(f"{TITLE} · updated "
                  f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')}Z")
     fig.tight_layout()
