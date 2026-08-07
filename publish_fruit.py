@@ -5,7 +5,10 @@ from huggingface_hub import HfApi
 
 REPO = "malaiwah/GLM-5.2-SIQ-Fruit-pilot"
 BASE = "/mnt/vault/llm/fruit-pilot"
-TOOLS = "/home/mbelleau/fruit-pilot"
+SOURCE = os.path.dirname(os.path.abspath(__file__))
+RUN_ASSETS = os.path.expanduser(
+    os.environ.get("FRUIT_RUN_ASSETS", "~/fruit-pilot")
+)
 
 def main():
     api = HfApi(token=os.environ["HF_TOKEN"])
@@ -18,16 +21,16 @@ def main():
     api.upload_file(path_or_fileobj=f"{BASE}/fruit_pilot.pt",
                     path_in_repo="training/fruit_pilot.pt", repo_id=REPO,
                     commit_message="BF16 training state dict")
-    for f in ("train_fruit.py", "export_fruit.py", "fruit_serve_test.py",
-              "fruit_serve_r28.py"):
-        api.upload_file(path_or_fileobj=f"{TOOLS}/{f}",
+    for f in ("checkpoint_contract.py", "train_fruit.py", "export_fruit.py",
+              "fruit_serve_test.py", "fruit_serve_r28.py"):
+        api.upload_file(path_or_fileobj=f"{SOURCE}/{f}",
                         path_in_repo=f"tools/{f}", repo_id=REPO,
                         commit_message=f"tools: {f}")
     for f in ("train.log", "serve-r25.log", "serve-r28.log"):
-        api.upload_file(path_or_fileobj=f"{TOOLS}/{f}",
+        api.upload_file(path_or_fileobj=f"{RUN_ASSETS}/{f}",
                         path_in_repo=f"logs/{f}", repo_id=REPO,
                         commit_message=f"logs: {f}")
-    api.upload_file(path_or_fileobj=f"{TOOLS}/modelcard/README.md",
+    api.upload_file(path_or_fileobj=f"{RUN_ASSETS}/modelcard/README.md",
                     path_in_repo="README.md", repo_id=REPO,
                     commit_message="model card")
     print(f"PUBLISHED: https://huggingface.co/{REPO}", flush=True)

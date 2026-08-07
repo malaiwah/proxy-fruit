@@ -6,7 +6,11 @@ uniform K3 — mirroring parent tier ratios), tier_bitmap + hybrid_tr3_tail
 config so the r25/r28 SIQ loader consumes it like any GLM checkpoint.
 """
 import json
-import math
+from checkpoint_contract import (
+    checkpoint_conventions as _checkpoint_conventions,
+    checkpoint_model_state as _checkpoint_model_state,
+    set_rope_theta as _set_rope_theta,
+)
 import struct
 import sys
 import time
@@ -38,45 +42,6 @@ MTP_LAYER = NL  # layer index 6
 PROJS = ("gate_proj", "up_proj", "down_proj")
 
 
-def _checkpoint_conventions(state, environ):
-    """Consume and validate the checkpoint's train/serve convention markers."""
-    marker = state.pop("serve_conv_v", None)
-    theta_tensor = state.pop("rope_theta_trained", None)
-    serve_native = marker is not None
-    if serve_native != (theta_tensor is not None):
-        raise RuntimeError(
-            "serve_conv_v and rope_theta_trained must either both be present "
-            "or both be absent")
-
-    configured_theta = environ.get("FRUIT_ROPE_THETA")
-    if serve_native:
-        if marker.numel() != 1 or int(marker.reshape(-1)[0]) != 2:
-            raise RuntimeError("unsupported serve_conv_v checkpoint marker")
-        if theta_tensor.numel() != 1:
-            raise RuntimeError("rope_theta_trained must contain one value")
-        rope_theta = float(theta_tensor.reshape(-1)[0])
-        if configured_theta and float(configured_theta) != rope_theta:
-            raise RuntimeError(
-                "FRUIT_ROPE_THETA disagrees with rope_theta_trained: "
-                f"{configured_theta} != {rope_theta}")
-    else:
-        if not configured_theta:
-            raise RuntimeError(
-                "legacy checkpoint has no trained theta marker; "
-                "set FRUIT_ROPE_THETA explicitly")
-        rope_theta = float(configured_theta)
-
-    if not math.isfinite(rope_theta) or rope_theta <= 0:
-        raise RuntimeError(f"invalid RoPE theta: {rope_theta}")
-    return serve_native, rope_theta
-
-
-def _set_rope_theta(config, rope_theta):
-    """Write both config locations used by current and legacy consumers."""
-    config["rope_theta"] = rope_theta
-    rope_parameters = dict(config.get("rope_parameters") or {})
-    rope_parameters["rope_theta"] = rope_theta
-    config["rope_parameters"] = rope_parameters
 
 
 def tier_of(layer: int, e: int) -> int:
@@ -98,7 +63,9 @@ def main() -> None:
     gf.BASE.HIDDEN = H
     gf.BASE.MOE_INTER = PAD_INTER or GEO_MOE_INTER
     gf.BASE.SLICE = gf.BASE.MOE_INTER
-    sd = torch.load(PT, map_location="cpu")
+    sd = _checkpoint_model_state(
+        torch.load(PT, map_location="cpu", weights_only=False)
+    )
 
     # --- convention auto-detect (Run-2) --------------------------------
     # Native checkpoints carry both markers and already use serving layouts.

@@ -21,6 +21,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from checkpoint_contract import checkpoint_conventions, checkpoint_model_state
+
 OUT = Path(os.environ.get("FRUIT_OUT_DIR", "/mnt/vault/llm/fruit-pilot"))
 SRC = Path("/mnt/vault/llm/glm52-franken/src")
 CORPUS = Path("/mnt/vault/llm/glm52-franken/corpus")
@@ -50,6 +52,40 @@ THETA = float(os.environ.get("ROPE_THETA", "10000"))
 # bit-exactly (required to resume pre-Run-2 checkpoints; the loader
 # errors loudly on any mismatch).
 CONV = {"serve": os.environ.get("SERVE_CONV", "1") == "1"}
+
+
+def _resume_checkpoint_theta(state, environ, serve_native, prior_theta=None):
+    """Validate a resume checkpoint's paired layout/theta contract."""
+    marker_state = {
+        name: state[name]
+        for name in ("serve_conv_v", "rope_theta_trained")
+        if name in state
+    }
+    contract_env = {}
+    if "ROPE_THETA" in environ:
+        contract_env["FRUIT_ROPE_THETA"] = environ["ROPE_THETA"]
+    elif prior_theta is not None:
+        contract_env["FRUIT_ROPE_THETA"] = str(prior_theta)
+    native, theta = checkpoint_conventions(marker_state, contract_env)
+    if native != serve_native:
+        raise RuntimeError(
+            "checkpoint was trained with "
+            f"{'serving' if native else 'legacy'} conventions but "
+            f"SERVE_CONV={'1' if serve_native else '0'}"
+        )
+    return theta
+
+
+def _restore_trained_theta_marker_precision(model, theta):
+    """Undo Module.to(dtype=...) casting of the exact theta metadata buffer."""
+    if not math.isfinite(theta) or theta <= 0:
+        raise ValueError(f"invalid trained RoPE theta: {theta}")
+    marker = getattr(model, "rope_theta_trained", None)
+    if marker is None:
+        raise ValueError("serving-native model is missing rope_theta_trained")
+    model.rope_theta_trained = torch.tensor(
+        [theta], device=marker.device, dtype=torch.float64
+    )
 RESUME_PT = os.environ.get("RESUME_PT", "")
 DISTILL = os.environ.get("INDEXER_DISTILL", "") == "1"
 GRAD_CKPT = os.environ.get("GRAD_CKPT", "") == "1"
@@ -789,6 +825,8 @@ def main():
                 print(f"[plot-val] failed: {exc}", flush=True)
         model.train()
     model = Fruit().to(dev, torch.bfloat16)
+    if CONV["serve"]:
+        _restore_trained_theta_marker_precision(model, THETA)
     if os.environ.get("FP8_LINEAR", "") == "1":
         fp8ify(model)
     raw_model = model
@@ -866,15 +904,21 @@ def main():
     term = {"flag": False}
     spike_state = {"ema": None, "skips": 0}
     signal.signal(signal.SIGTERM, lambda *_: term.update(flag=True))
+    resume_theta = None
     def check_conv(sd, src):
-        has = "serve_conv_v" in sd
-        if has != CONV["serve"]:
+        nonlocal resume_theta
+        global THETA
+        try:
+            resume_theta = _resume_checkpoint_theta(
+                sd, os.environ, CONV["serve"], resume_theta
+            )
+        except RuntimeError as exc:
             raise SystemExit(
-                f"[conv] {src} was trained with "
-                f"{'serving' if has else 'legacy'} conventions but "
-                f"SERVE_CONV={'1' if CONV['serve'] else '0'} — set "
-                f"SERVE_CONV={'1' if has else '0'} and relaunch (mixing "
-                "conventions silently corrupts RoPE/MTP)")
+                f"[conv] {src}: {exc} — set matching SERVE_CONV and "
+                "ROPE_THETA, then relaunch"
+            ) from exc
+        THETA = resume_theta
+        print(f"[conv] {src}: effective resume theta={THETA:g}", flush=True)
 
     print("[conv] serving conventions: interleaved rope + [embed,hidden] "
           "eh_proj (export converts nothing)" if CONV["serve"] else
@@ -882,10 +926,11 @@ def main():
           "[hidden,embed] eh_proj (export converts)", flush=True)
     start = 0
     if RESUME_PT:
-        _sd = torch.load(RESUME_PT, map_location=dev, weights_only=False)
+        _payload = torch.load(RESUME_PT, map_location=dev, weights_only=False)
+        _sd = checkpoint_model_state(_payload)
         check_conv(_sd, RESUME_PT)
         raw_model.load_state_dict(_sd, strict=True)
-        del _sd
+        del _payload, _sd
         print(f"[resume-weights] {RESUME_PT}", flush=True)
         if ckpt_path.exists():
             print(f"[resume] WARNING: stale {ckpt_path} exists and will "
@@ -903,8 +948,8 @@ def main():
             tok_state["seen"] = state["tokens_seen"]
         if "rng" in state:            # ~10KB insurance (HF-Trainer practice)
             try:
-                torch.set_rng_state(state["rng"]["torch"])
-                torch.cuda.set_rng_state(state["rng"]["cuda"], dev)
+                torch.set_rng_state(state["rng"]["torch"].cpu())
+                torch.cuda.set_rng_state(state["rng"]["cuda"].cpu(), dev)
                 np.random.set_state(state["rng"]["numpy"])
                 if "data_rng" in state["rng"]:
                     rng.bit_generator.state = state["rng"]["data_rng"]
@@ -1087,11 +1132,7 @@ def main():
         if step % 250 == 249 and is_main:
             # SIGSEGV insurance; tmp+replace = atomic vs crash AND vs the
             # in-flight push thread (which reads a hardlink of the old inode)
-            torch.save({"model": raw_model.state_dict(),
-                        "opt": opt.state_dict(), "step": step,
-                        "rng": {"torch": torch.get_rng_state(),
-                                "cuda": torch.cuda.get_rng_state(dev),
-                                "numpy": np.random.get_state()}},
+            torch.save(ckpt_state(step),
                        str(ckpt_path) + ".tmp")
             os.replace(str(ckpt_path) + ".tmp", ckpt_path)
         if step % push_every == push_every - 1 and is_main:

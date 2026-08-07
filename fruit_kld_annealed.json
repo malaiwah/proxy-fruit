@@ -1,0 +1,103 @@
+{
+  "kind": "fruit_full_vocabulary_kld",
+  "kv_cache_dtype": "fp8_ds_mla",
+  "max_forward_kl": 0.006553700662414324,
+  "mean_forward_kl": 0.0013205076399647666,
+  "mean_top10_overlap": 0.9833333333333334,
+  "per_position": [
+    {
+      "forward_kl": 0.006553700662414324,
+      "served_position": 1,
+      "target_token_id": 5193,
+      "top10_overlap": 1.0,
+      "top1_match": 1
+    },
+    {
+      "forward_kl": 4.081077165291848e-05,
+      "served_position": 2,
+      "target_token_id": 264,
+      "top10_overlap": 1.0,
+      "top1_match": 1
+    },
+    {
+      "forward_kl": 1.0392669981738657e-06,
+      "served_position": 3,
+      "target_token_id": 882,
+      "top10_overlap": 0.9,
+      "top1_match": 1
+    },
+    {
+      "forward_kl": 0.00016757367398761977,
+      "served_position": 4,
+      "target_token_id": 11,
+      "top10_overlap": 1.0,
+      "top1_match": 1
+    },
+    {
+      "forward_kl": 0.0002715888983445273,
+      "served_position": 5,
+      "target_token_id": 1052,
+      "top10_overlap": 1.0,
+      "top1_match": 1
+    },
+    {
+      "forward_kl": 0.0008883325663910368,
+      "served_position": 6,
+      "target_token_id": 572,
+      "top10_overlap": 1.0,
+      "top1_match": 1
+    }
+  ],
+  "positions": 6,
+  "prompt": "Once upon a time, there was",
+  "reference": {
+    "checkpoint": "/mnt/vault/llm/fruit-pilot/final/fruit_v1_annealed.pt",
+    "checkpoint_sha256": "98ac7cb4f7799194424782b505d622069fecf4dbca5f5acb2658f2a66c3631f6",
+    "cublas_workspace_config": ":4096:8",
+    "deterministic_algorithms": true,
+    "geometry": {
+      "dense_intermediate": 2048,
+      "heads": 16,
+      "hidden": 1024,
+      "layers": 13,
+      "moe_intermediate": 512,
+      "q_lora": 1024
+    },
+    "moe_impl": "grouped",
+    "rope_theta": 500000.0,
+    "sdpa_backend": "math",
+    "serving_conventions": false,
+    "tokenizer": "/mnt/vault/llm/glm52-franken/src",
+    "tokenizer_hashes": {
+      "MANIFEST.sha256": "389f6f12fa8036d90a12f25a059254dcd3ab9b2a80b8d1bc610b000a3610517e",
+      "config.json": "912cb50f96a42a21501367bfe38aa29d531146d76aadc5fd62ac20a3008d7c34",
+      "model.safetensors.index.json": "3d7cb150227a2cee464eaf174a35d5aeda797a6c13e42825f228a4a4f46ee38e",
+      "tokenizer.json": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+      "tokenizer_config.json": "98b1271574f41abf89427ae2dda030d94dc9478f0edc5a8bd240db213c6fd5fc"
+    },
+    "torch_version": "2.12.0+cu132"
+  },
+  "reference_file": "/mnt/vault/llm/fruit-pilot/fruit_kld_ref_annealed.pt",
+  "reference_file_sha256": "1e11e847d745e7015291543620caec65c99ce8d9bb8c72f4db54f8790bb20ddc",
+  "schema_version": 1,
+  "served": "/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-annealed",
+  "served_hashes": {
+    "MANIFEST.sha256": "e64be6abcb9711696c30fbd637af9c5bf363845847825ef61a33bacc41ab38b3",
+    "config.json": "c414cf8d522a5b23b7830b8337e64c52c6341efac1a30b6fd082162a401201fd",
+    "model.safetensors.index.json": "5808a4b3e75c4a949a1ede42e6c6fb2576089ec1544038b77de24076e99bf3da",
+    "tokenizer.json": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d",
+    "tokenizer_config.json": "98b1271574f41abf89427ae2dda030d94dc9478f0edc5a8bd240db213c6fd5fc"
+  },
+  "token_ids": [
+    12516,
+    5193,
+    264,
+    882,
+    11,
+    1052,
+    572
+  ],
+  "top1_agreement": 1.0,
+  "vllm_version": "0.11.2.dev280+gilded.gnosis.v20.vllmf5981f1.si978cdb3.fi801d57a.cu132.20260803.r25",
+  "vocab_size": 154880
+}

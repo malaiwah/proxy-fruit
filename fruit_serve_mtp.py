@@ -15,6 +15,7 @@ MIN_ACCEPTANCE (hard lower bound, default 0.50).
 """
 import os
 import math
+from numbers import Integral
 import sys
 import time
 
@@ -22,8 +23,8 @@ import time
 
 def _acceptance_stats(vals, k, minimum):
     """Validate engine counters and return acceptance rate and mean length."""
-    if k <= 0:
-        raise ValueError(f"K must be positive, got {k}")
+    if isinstance(k, bool) or not isinstance(k, Integral) or k <= 0:
+        raise ValueError(f"K must be a positive integer, got {k}")
     if not math.isfinite(minimum) or not 0.0 <= minimum <= 1.0:
         raise ValueError(f"MIN_ACCEPTANCE must be in [0, 1], got {minimum}")
     names = (
@@ -35,19 +36,25 @@ def _acceptance_stats(vals, k, minimum):
     if missing:
         raise ValueError(f"missing spec-decode counters: {', '.join(missing)}")
     try:
-        drafts, draft_tokens, accepted = (float(vals[name]) for name in names)
+        counter_values = tuple(float(vals[name]) for name in names)
     except (TypeError, ValueError) as exc:
         raise ValueError("spec-decode counters must be numeric") from exc
-    if not all(math.isfinite(value)
-               for value in (drafts, draft_tokens, accepted)):
+    if not all(math.isfinite(value) for value in counter_values):
         raise ValueError("spec-decode counters must be finite")
+    if not all(value.is_integer() for value in counter_values):
+        raise ValueError("spec-decode counters must be integral")
+    drafts, draft_tokens, accepted = map(int, counter_values)
     if drafts <= 0 or draft_tokens <= 0:
         raise ValueError(
-            f"spec decoder produced no drafts: drafts={drafts:g}, "
-            f"draft_tokens={draft_tokens:g}")
+            f"spec decoder produced no drafts: drafts={drafts}, "
+            f"draft_tokens={draft_tokens}")
+    if draft_tokens > k * drafts:
+        raise ValueError(
+            f"impossible draft-token count: {draft_tokens} exceeds "
+            f"K*Drafts={k * drafts}")
     if accepted < 0 or accepted > draft_tokens:
         raise ValueError(
-            f"invalid accepted-token count: {accepted:g}/{draft_tokens:g}")
+            f"invalid accepted-token count: {accepted}/{draft_tokens}")
     rate = accepted / draft_tokens
     if rate < minimum:
         raise ValueError(
@@ -116,7 +123,6 @@ def main() -> None:
         rate, mean = _acceptance_stats(vals, k, minimum)
     except ValueError as exc:
         raise SystemExit(f"FRUIT-MTP-FAIL: {exc}") from exc
-    drafts = vals["vllm:spec_decode_num_drafts"]
     draft_t = vals["vllm:spec_decode_num_draft_tokens"]
     acc = vals["vllm:spec_decode_num_accepted_tokens"]
     print(f"[mtp] acceptance rate = {rate:.3f} "

@@ -85,14 +85,18 @@ on disk.
 - **RoPE layout**: training rotates half-split pairs; the serving stack
   rotates interleaved. The export permutes rope-dim output channels of
   `q_b_proj`/`kv_a_proj_with_mqa`/indexer `wq_b`/`wk` (GPT-NeoX↔GPT-J
-  trick) and writes the nested `rope_parameters.rope_theta`. Round-trip
-  parity: **top-1 92.9%, top-10 overlap 88.8%, KL 0.045** on the full-size final checkpoint (the pre-fix export measured 69%/0.809 on the mid-run checkpoint; 95.2%/0.020 post-fix).
+  trick) and writes theta 500,000 in both config locations. A matched,
+  deterministic annealed trainer→mixed-SIQ full-vocabulary smoke over six
+  fixed prediction positions measured mean forward KL **0.001321**, maximum
+  KL **0.006554**, top-1 **6/6**, and mean top-10 overlap **98.3%**. This is
+  a structural smoke, not a document-disjoint quality estimate. Older reported
+  `mean-KL(topK)` numbers were unnormalized top-K drift scores, not KL.
 - **MTP `eh_proj` concat order**: the trainer computes
   `eh_proj(cat[hidden, embed])`; vLLM MTP modules compute
   `cat[embed, hidden]`. The export swaps the input-channel halves.
-  Without it, MTP acceptance is 0.4% (chance); with it, **97.7%
-  (final) / 94.1% (annealed)** at k=1 on greedy license recitation,
-  decode 37 → 61.7 tok/s on an RTX 5090.
+  MTP k=1 acceptance on greedy license recitation measured **97.7%
+  (final) / 94.1% (annealed)**. On the same r25/fp8/eager final setup,
+  decode measured 53.9 tok/s without MTP and 61.6 tok/s with MTP.
 
 ## Validation (RTX 5090, gilded-gnosis r25/r28 images)
 
@@ -100,8 +104,9 @@ on disk.
 |---|---|---|
 | small-prompt battery (1/2/5/8/9) | PASS | PASS |
 | license recitation probes | PASS | PASS |
-| MTP k=1 acceptance (greedy recitation) | **94.1%** | — |
-| decode (CC1, eager) | ~62 tok/s (MTP) | PASS |
+| MTP k=1 acceptance (greedy recitation) | **94.1%** | not measured |
+| annealed decode, CC1 eager, no MTP | 53.6 tok/s | 36.4 tok/s |
+| annealed decode, CC1 eager, MTP k=1 | 60.9 tok/s | not measured |
 
 **Apache-2.0 needle** (held out of pretraining AND distillation): MIT
 control overlap **0.974** vs Apache **0.000** — the model can recite in-corpus

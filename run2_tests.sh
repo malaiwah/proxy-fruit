@@ -9,7 +9,8 @@ COMMON=(-v "$HOME/fruit-pilot:/fp" -v /mnt/vault:/mnt/vault -v fruit-pip:/piploc
         -e TOK_DIR=/mnt/vault/llm/glm52-franken/src
         -e SHARD_DIR=/mnt/vault/llm/fruit-pilot/sft-shards-smoke
         -e MOE_IMPL=stacked -e EVAL_EVERY=100000 -e LR=3e-4
-        -e SEQ=512 -e BS=8 -e FRUIT_OUT_DIR="$OUT")
+        -e ROPE_THETA=500000 -e SEQ=512 -e BS=8
+        -e FRUIT_OUT_DIR="$OUT")
 run() {  # name steps extra-env...
   local name=$1 steps=$2; shift 2
   echo "=== $name ==="

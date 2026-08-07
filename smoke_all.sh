@@ -51,7 +51,7 @@ EOF
 
 # common tiny-geometry env (trainer defaults: H=512 NL=6 HEADS=8 MOE_INTER=128)
 export TOK_DIR=/workspace/tokenizer FRUIT_OUT_DIR=/workspace/out \
-  EVAL_EVERY=100000 MOE_IMPL=stacked LR=3e-4 SEQ=512
+  EVAL_EVERY=100000 MOE_IMPL=stacked LR=3e-4 ROPE_THETA=500000 SEQ=512
 mkdir -p /workspace/out
 last_loss() { grep -aE "^\[[0-9]+/" "$1" | tail -1 | grep -aoE "loss [0-9.]+" | cut -d' ' -f2; }
 

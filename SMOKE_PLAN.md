@@ -34,9 +34,10 @@ aider jsonl) are fine.
 ## Rental-tier test matrix (executor: `smoke_all.sh`)
 
 Provision: `jl create --gpu RTX-PRO6000 --spot --num-gpus 4 --storage 100 --yes`
-then `jl upload` {`smoke_all.sh`, `train_fruit.py`, `fruit_data_prep.py`,
-`sft_data_prep.py`, `finish_sft_manifest.py`, `probe_ckpt.py`,
-`progress_publish.py`} to `/workspace`, then
+then `jl upload` {`smoke_all.sh`, `checkpoint_contract.py`,
+`train_fruit.py`, `fruit_data_prep.py`, `sft_data_prep.py`,
+`finish_sft_manifest.py`, `probe_ckpt.py`, `progress_publish.py`} to
+`/workspace`, then
 `jl exec <id> -- bash /workspace/smoke_all.sh` (HF_TOKEN baked by launcher).
 
 | # | Test | Validates | ~time |
@@ -90,13 +91,14 @@ Measured on the step-33.6k mid-run checkpoint: export of 5.04B = **~49 s
 per MoE layer, ~12 min total** on one RTX 5090 (2.89 GiB out); serve
 gauntlets pass on both r25 (fp8_ds_mla) and r28 (nvfp4_ds_mla +
 B12X_MLA_SPARSE), decode 35.9 tok/s, full small-prompt battery green,
-coherent quantized generations. Round-trip parity (parity_test.py, two
-clean processes — ref then serve): RoPE-fixed export agrees with the
-training graph at 95.2% top-1 / KL 0.020 vs the pre-fix export's 69.0% /
-KL 0.809. Run parity after ANY export-path change. Volume hygiene: never
-install into the pip volume without --no-deps — a stray PyPI torch once
-shadowed the container build via PYTHONPATH and killed vLLM engine init
-(deep_gemm ABI symbol errors are the tell).
+coherent quantized generations. Historical round-trip parity notes reported
+95.2% top-1 / top-K drift 0.020 after the RoPE fix versus 69.0% / 0.809
+before it; the retained raw logs do not establish those values, and the
+top-K score is not KL. Run `parity_test.py` as a structural gate and
+`fruit_kld.py` for full-vocabulary KL after ANY export-path change. Volume
+hygiene: never install into the pip volume without `--no-deps` — a stray
+PyPI torch once shadowed the container build via PYTHONPATH and killed vLLM
+engine init (deep_gemm ABI symbol errors are the tell).
 
 1. `export_fruit.py` on a smoke checkpoint (FRUIT_TIERS=k3, PAD_INTER as
    needed) — shape/config/manifest correctness.
@@ -114,9 +116,10 @@ shadowed the container build via PYTHONPATH and killed vLLM engine init
 
 ## Finale-night gotchas (2026-08-07)
 
-- **Parity ref on stage2 checkpoints needs `MOE_IMPL=grouped`** — the quad
-  ran grouped, so `fruit_v1_{long,final,annealed,instruct}.pt` store stacked
-  expert tensors (`mlp.w_gate/…`), not per-expert keys.
+- **Parity ref on stage2 checkpoints needs `MOE_IMPL=grouped` and an
+  explicit `ROPE_THETA=500000` for markerless Phase-1 checkpoints** — the
+  quad ran grouped, so `fruit_v1_{long,final,annealed,instruct}.pt` stores
+  stacked expert tensors (`mlp.w_gate/…`), not per-expert keys.
 - `podman run … python3 - <<EOF` silently no-ops without **`-i`** (stdin
   never attaches; python reads EOF, exits 0).
 - `pgrep -f <script>` and `grep <marker>` self-match your own command line
@@ -126,8 +129,9 @@ shadowed the container build via PYTHONPATH and killed vLLM engine init
   inputs: an engine-init segfault in the SIQ runtime planner, and an nvcc
   parse error inside a glibc header during the exllamav3 extension build.
   Retry once before diagnosing.
-- Engine-teardown segfaults after `FRUIT-*-OK` printed are harmless (the
-  test already passed; shutdown-path crash in EngineCore).
+- Engine-teardown status 139 is tolerated only after the arm's exact
+  `FRUIT-*-OK` sentinel. `finale.sh::run_arm` enforces that distinction;
+  never treat arbitrary teardown failure as success.
 - Needle/chat calibration: needle overlap must compare only up to the
   reference length; chat battery needs `max_tokens=700` (the 5B model is
   verbose — 300 truncates mid-answer).
@@ -136,7 +140,7 @@ shadowed the container build via PYTHONPATH and killed vLLM engine init
 
 | repo | content | gauntlet |
 |---|---|---|
-| malaiwah/GLM-5.2-SIQ-Fruit | QNOISE-annealed export | r25+r28 PASS, MTP 94.1%, needle 0.974/0.000, parity (final variant) 92.9%/KL 0.045 |
+| malaiwah/GLM-5.2-SIQ-Fruit | QNOISE-annealed export | r25+r28 PASS; historical MTP 94.1%, needle 0.974/0.000; deterministic six-position exact-KL smoke mean 0.001321/max 0.006554/top-1 6/6 |
 | malaiwah/GLM-5.2-SIQ-Fruit-Instruct | SFT export | r25+r28 PASS, MTP 79.0%, chat 3/4, needle 0.974/0.000 |
 | rental total | MAIN+LONG+DISTILL+QNOISE+SFT on 4×H200 | ~$228 |
 

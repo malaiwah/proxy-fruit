@@ -154,6 +154,13 @@ paths, on a ~$11 spot node. Example output (tiny-geometry smoke run on
 
 ![smoke suite output](https://huggingface.co/malaiwah/fruit-smoke/resolve/main/val_progress.png?v=phase1-complete)
 
+Fast fail-closed contracts live in `test_proxy_contracts.py`.
+`fruit_qsrt_probe.py` authenticates the annealed source and checks real-weight
+SiLU plus ordinary/MTP coupled-permutation closure on CPU.
+`fruit_kld.py` performs a two-process trainer→served comparison using all
+154,880 vocabulary log probabilities; `parity_test.py` remains the cheaper
+top-K structural gate and does not claim KL.
+
 ## Reproduce
 
 ```
