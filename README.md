@@ -4,14 +4,14 @@
 on consumer and spot hardware.** (~$300 spot compute, ~2 days on 4×H200,
 every step rehearsed first on one RTX 5090.)
 
-![training progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/val_progress.png)
+![training progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/val_progress.png?v=phase1-complete)
 *The complete Phase-1 run (MAIN → LONG → DISTILL → QNOISE → SFT,
 57,293 steps / 5.43B tokens, final global val 2.280) — rendered by the
 toolchain's [ledger publisher](progress_publish.py): per-source val curves,
 train/MTP loss, LR + grad-norm, router aux + step time, host/GPU
 telemetry, with incarnation markers at every restart or stage change.*
 
-![in-trainer val progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/progress/fruit_v1_val.png)
+![in-trainer val progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/progress/fruit_v1_val.png?v=phase1-complete)
 *The same history through the trainer's own `PLOT_VAL=1` renderer
 (Run-2 feature, [train_fruit.py](train_fruit.py)): each val sweep appends
 to a resume-safe jsonl and re-renders this plot in-trainer — no external
@@ -151,7 +151,7 @@ Every substantive toolchain change runs the [smoke suite](SMOKE_PLAN.md)
 paths, on a ~$11 spot node. Example output (tiny-geometry smoke run on
 4× RTX 6000 Pro, incl. the telemetry/throttle-forensics rows):
 
-![smoke suite output](https://huggingface.co/malaiwah/fruit-smoke/resolve/main/val_progress.png)
+![smoke suite output](https://huggingface.co/malaiwah/fruit-smoke/resolve/main/val_progress.png?v=phase1-complete)
 
 ## Reproduce
 
