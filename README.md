@@ -26,15 +26,16 @@ public clean-room GLM-5.2 serving-proxy program combining trained
 weights, production-critical 256-expert MLA/DSA/MTP geometry, the exact
 tokenizer and serialization invariants, and an end-to-end SIQ/Trellis
 export-and-serve regression workflow on accessible hardware — but the
-parts have close precedents (see prior art below), and known
-train-vs-serve parity gaps are tracked in REVIEW.md until round-trip
-numerical parity is demonstrated. "Serving proxy" here means a **CI fixture
-for a serving/quantization stack** — distinct from the μP/DoReMi sense of
-"proxy model" (small models proxying *training dynamics*); ours proxies
-*serving behavior*. "Architecture-complete" means: same computation graph
-and serialization layout (state-dict keys, config schema, tokenizer),
-serving-critical dimensions preserved exactly, remaining dimensions scaled
-by documented rules — see the fidelity manifest below. Weights are its own.
+parts have close precedents (see prior art below). Public claims are tied to
+immutable Hub revisions and measured gates in the model cards; `REVIEW.md`
+retains the independent review ledger. "Serving proxy" here means a **CI
+fixture for a serving/quantization stack** — distinct from the μP/DoReMi sense
+of "proxy model" (small models proxying *training dynamics*); ours proxies
+*serving behavior*. "Architecture-complete" means the same computation graph
+and serialization layout (state-dict keys, config schema, tokenizer), with
+serving-critical dimensions preserved exactly and remaining dimensions scaled
+by documented rules — see the fidelity manifest below. Its weights were
+trained from scratch.
 
 **Closest prior art** (each bracketing one half of the idea):
 [inference-optimization/GLM-5.2-0.8B-A0.8B](https://huggingface.co/inference-optimization/GLM-5.2-0.8B-A0.8B)
@@ -86,12 +87,34 @@ hardware you own.
 | `intermediate_size` (dense) | 12288 | 2048 | scaled ÷6 |
 
 Sibling artifacts on Hugging Face:
-- [`malaiwah/GLM-5.2-SIQ-Fruit-pilot`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-pilot) — 413M pilot ("Clémentine"), serves on the real stack
-- [`malaiwah/GLM-5.2-SIQ-Fruit`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit) — **the 5B model, released** (QNOISE-annealed, full gauntlet in the card)
-- [`malaiwah/GLM-5.2-SIQ-Fruit-Instruct`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct) — the SFT chat variant
-- [`malaiwah/fruit-phase1-ckpt`](https://huggingface.co/malaiwah/fruit-phase1-ckpt) — live training checkpoints
-- [`malaiwah/fruit-phase1-shards`](https://huggingface.co/datasets/malaiwah/fruit-phase1-shards) — pre-tokenized corpus (7.55B tokens + SFT shards)
-- [`malaiwah/GLM-5.2-Legume`](https://huggingface.co/malaiwah/GLM-5.2-Legume) / [`-v3`](https://huggingface.co/malaiwah/GLM-5.2-Legume-v3) — the layer-surgery lineage that preceded Fruit
+
+- [`GLM-5.2-SIQ-Fruit`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit) — 5.04B-parameter QNOISE-annealed SIQ serving fixture.
+- [`GLM-5.2-SIQ-Fruit-Instruct`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct) — assistant-masked SFT variant, explicitly contaminated for Aider/Exercism evaluation.
+- [`GLM-5.2-SIQ-Fruit-bf16`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-bf16) — manifest-authenticated plain-BF16 twin for CPU and unquantized reference runs.
+- [`GLM-5.2-SIQ-Fruit-pilot`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-pilot) — corrected 413M pilot ("Clémentine") for inexpensive real-stack validation.
+- [`fruit-phase1-ckpt`](https://huggingface.co/malaiwah/fruit-phase1-ckpt) — model-only stage weights, resumable optimizer/RNG checkpoints, metrics, and plots.
+- [`fruit-phase1-shards`](https://huggingface.co/datasets/malaiwah/fruit-phase1-shards) — 7,396,228,297 published pretraining tokens plus masked SFT/replay shards; the gated code lane is not redistributed.
+- [`fruit-smoke`](https://huggingface.co/malaiwah/fruit-smoke) — disposable cross-site regression artifacts.
+- [`GLM-5.2-Legume`](https://huggingface.co/malaiwah/GLM-5.2-Legume) / [`-v3`](https://huggingface.co/malaiwah/GLM-5.2-Legume-v3) — layer-surgery lineage that preceded Fruit.
+
+## Published release gates (2026-08-07)
+
+- Annealed SIQ base, six fixed positions over all 154,880 logits: mean forward
+  KL **0.001321**, maximum **0.006554**, top-1 **6/6**, mean top-10 overlap
+  **98.33%**. This is a structural smoke, not a document-disjoint quality
+  estimate.
+- Corrected pilot: trainer-to-served top-1 **42/42**, mean top-10 overlap
+  **95.0%**, and MTP k=1 acceptance **499/524 = 95.2%**. The card records the
+  corrected RoPE convention, channel permutations, MTP input-half swap, and
+  exact-zero-padded served MoE width.
+- Plain-BF16 twin: both RoPE fields are **500,000**; measured 20-core CPU
+  decode is **32 tok/s** with **16.01 GiB** loaded / **16.76 GiB** peak RSS.
+  Ordinary Transformers generation does not consume the stored MTP/indexer
+  tensors.
+- All six manifest-bearing Fruit repositories were re-read at their immutable
+  release revisions: zero malformed lines, missing paths, or SHA-256
+  mismatches. The pilot publisher validates inventory closure and all payload
+  hashes before creating one parent-guarded Hub commit.
 
 ## The toolchain
 
