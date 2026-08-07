@@ -887,6 +887,8 @@ def main():
         if DISTILL:
             dl = [b.self_attn.distill_loss for b in raw_model.layers
                   if b.self_attn.distill_loss is not None]
+            if raw_model.mtp_block.self_attn.distill_loss is not None:
+                dl.append(raw_model.mtp_block.self_attn.distill_loss)
             if dl:
                 distill = sum(dl) / len(dl)
                 loss = loss + 0.1 * distill
@@ -922,6 +924,8 @@ def main():
             # Kills the bf16 dead-zone (updates < ~0.2% are otherwise lost).
             with torch.no_grad():
                 for m, p in zip(masters, trainable):
+                    if p.grad is None:   # e.g. params outside this stage's
+                        continue         # loss graph (mtp indexer w/o distill)
                     m.grad = p.grad.float() if m.grad is None \
                         else m.grad.copy_(p.grad.float())
                 opt.step()
