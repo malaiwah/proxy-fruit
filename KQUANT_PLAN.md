@@ -993,11 +993,22 @@ Runtime work begins only after public APIs and ownership compose cleanly.
   tests passed, two
   independent-review P2s were fixed and re-reviewed, and
   [kquant PR #4](https://github.com/local-inference-lab/kquant/pull/4) is open.
-- **In progress:** review/merge stacked kquant PR #4; await the kquant #3
-  naming/schema/license answer and proxy #2 publication correction.
+- **Done 2026-08-07 — Fruit publication:** corrected and republished the BF16
+  twin at `dfb5c877` (theta 500,000 in both config locations; 23-entry
+  manifest closed; deterministic six-position full-vocabulary forward KL
+  0.001321 mean / 0.006554 max, 6/6 top-1); published audited base, Instruct,
+  pilot, checkpoint, shard-dataset, and smoke cards; and closed proxy issue
+  #2. The corrected pilot is `7ee053e`: all 28 published artifact/provenance
+  files match local SHA-256, its 17-entry serving manifest closes, and the
+  measured MTP gate remains 499/524 = 95.2%. The six manifest-bearing Hub
+  repositories have zero malformed, missing, or mismatched entries. GitHub
+  `proxy-fruit` main includes the fail-closed atomic publisher through
+  `7d6fb34`.
+- **In progress:** review/merge stacked kquant PR #4 and await the kquant #3
+  naming/schema/license answer.
 - **Next executable kquant slice:** after those ownership and prerequisite
   reviews close, run the frozen 19-instance sampled-evidence plan in PR B.
   Do not modify the frozen TP12 runtime/package code or claim a Fruit physical
   format before #3 resolves it.
 - **Blocked:** public Fruit QSRT serving, full-model QSRT claims, and external
-  redistribution pending the kernel/API, publication, and license gates above.
+  redistribution pending the kernel/API and license gates above.
