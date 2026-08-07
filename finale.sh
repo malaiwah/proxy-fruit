@@ -4,7 +4,7 @@
 # r25 battery, MTP acceptance, r28 battery; needle+chat+parity where they
 # apply. Sequential — one GPU. Log greppable: every test prints an
 # OK/FAIL sentinel.
-set -uo pipefail
+set -euo pipefail
 R25=docker.io/voipmonitor/vllm:gilded-gnosis-v20-vllmf5981f1-si978cdb3-fi801d57a-cu132-20260803-r25
 R28=docker.io/voipmonitor/vllm:gilded-gnosis-v20-vllme1e9426-si200c1db-fi801d57a-cu132-20260804-r28
 FIN=/mnt/vault/llm/fruit-pilot/final

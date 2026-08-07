@@ -109,11 +109,16 @@ def serve_phase(enc, ref):
                           (r_lps[i_] - served[tid])
             kl_sum += kl
             n += 1
-    print(f"PARITY: n={n} top1-agree={agree1/n*100:.1f}% "
+    if n == 0:
+        raise SystemExit("PARITY-STRUCTURAL-MISMATCH: no positions compared")
+    agreement = agree1 / n
+    print(f"PARITY: n={n} top1-agree={agreement*100:.1f}% "
           f"top{K}-overlap={overlap/n*100:.1f}% "
           f"mean-KL(topK)={kl_sum/n:.4f}", flush=True)
-    ok = (agree1 / n) > 0.6        # structural-mismatch detector
+    ok = agreement > 0.6          # structural-mismatch detector
     print("PARITY-" + ("OK" if ok else "STRUCTURAL-MISMATCH"), flush=True)
+    if not ok:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

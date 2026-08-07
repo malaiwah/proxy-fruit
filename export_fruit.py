@@ -6,13 +6,13 @@ uniform K3 — mirroring parent tier ratios), tier_bitmap + hybrid_tr3_tail
 config so the r25/r28 SIQ loader consumes it like any GLM checkpoint.
 """
 import json
+import math
 import struct
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, "/tools")
-import glm_franken as gf
 
 import os
 PT = Path(os.environ.get("FRUIT_PT",
@@ -38,6 +38,47 @@ MTP_LAYER = NL  # layer index 6
 PROJS = ("gate_proj", "up_proj", "down_proj")
 
 
+def _checkpoint_conventions(state, environ):
+    """Consume and validate the checkpoint's train/serve convention markers."""
+    marker = state.pop("serve_conv_v", None)
+    theta_tensor = state.pop("rope_theta_trained", None)
+    serve_native = marker is not None
+    if serve_native != (theta_tensor is not None):
+        raise RuntimeError(
+            "serve_conv_v and rope_theta_trained must either both be present "
+            "or both be absent")
+
+    configured_theta = environ.get("FRUIT_ROPE_THETA")
+    if serve_native:
+        if marker.numel() != 1 or int(marker.reshape(-1)[0]) != 2:
+            raise RuntimeError("unsupported serve_conv_v checkpoint marker")
+        if theta_tensor.numel() != 1:
+            raise RuntimeError("rope_theta_trained must contain one value")
+        rope_theta = float(theta_tensor.reshape(-1)[0])
+        if configured_theta and float(configured_theta) != rope_theta:
+            raise RuntimeError(
+                "FRUIT_ROPE_THETA disagrees with rope_theta_trained: "
+                f"{configured_theta} != {rope_theta}")
+    else:
+        if not configured_theta:
+            raise RuntimeError(
+                "legacy checkpoint has no trained theta marker; "
+                "set FRUIT_ROPE_THETA explicitly")
+        rope_theta = float(configured_theta)
+
+    if not math.isfinite(rope_theta) or rope_theta <= 0:
+        raise RuntimeError(f"invalid RoPE theta: {rope_theta}")
+    return serve_native, rope_theta
+
+
+def _set_rope_theta(config, rope_theta):
+    """Write both config locations used by current and legacy consumers."""
+    config["rope_theta"] = rope_theta
+    rope_parameters = dict(config.get("rope_parameters") or {})
+    rope_parameters["rope_theta"] = rope_theta
+    config["rope_parameters"] = rope_parameters
+
+
 def tier_of(layer: int, e: int) -> int:
     if TIERS == "k3":
         return 3
@@ -50,6 +91,7 @@ def tier_of(layer: int, e: int) -> int:
 
 def main() -> None:
     import torch
+    import glm_franken as gf
     gf.load_base(Path("/tools/encode_tr3_v31.py"))
     # Re-point the encoder's GLM geometry at Fruit's micro dims (the
     # hadamard/tile constraints still hold: both are multiples of 128).
@@ -59,19 +101,13 @@ def main() -> None:
     sd = torch.load(PT, map_location="cpu")
 
     # --- convention auto-detect (Run-2) --------------------------------
-    # SERVE_CONV-trained checkpoints (marker buffer serve_conv_v) already
-    # use serving layouts: skip the RoPE permutation AND the eh_proj swap
-    # below. The trained rope theta rides in the checkpoint too — it wins
-    # over the FRUIT_ROPE_THETA env unless the env is explicitly set.
-    serve_native = sd.pop("serve_conv_v", None) is not None
-    theta_t = sd.pop("rope_theta_trained", None)
-    if theta_t is not None and not os.environ.get("FRUIT_ROPE_THETA"):
-        os.environ["FRUIT_ROPE_THETA"] = str(float(theta_t.flatten()[0]))
-        print(f"[conv] rope_theta from checkpoint: "
-              f"{os.environ['FRUIT_ROPE_THETA']}", flush=True)
+    # Native checkpoints carry both markers and already use serving layouts.
+    # Legacy checkpoints require an explicit theta because the parent config's
+    # default is not the theta they were trained with.
+    serve_native, rope_theta = _checkpoint_conventions(sd, os.environ)
     print(f"[conv] checkpoint conventions: "
-          f"{'SERVING (no conversion)' if serve_native else 'legacy (converting)'}",
-          flush=True)
+          f"{'SERVING (no conversion)' if serve_native else 'legacy (converting)'}; "
+          f"rope_theta={rope_theta}", flush=True)
 
     # --- RoPE layout conversion (review finding 1) ---------------------
     # Training rotates half-split pairs (i, i+d/2); the serving stack
@@ -107,6 +143,11 @@ def main() -> None:
         elif k.endswith("indexer.wk.weight"):
             w = sd[k]                                # [128, in]
             sd[k] = w[pi].contiguous(); n_perm += 1
+    expected_permutations = 0 if serve_native else 4 * (NL + 1)
+    if n_perm != expected_permutations:
+        raise RuntimeError(
+            "RoPE conversion inventory mismatch: "
+            f"converted {n_perm}, expected {expected_permutations}")
     print(f"[rope] interleave-conversion applied to {n_perm} tensors",
           flush=True)
 
@@ -116,8 +157,14 @@ def main() -> None:
     # — swap eh_proj's input-channel halves so serving matches the trained
     # function. Without this the drafter is scrambled: measured 4/1016
     # (0.4%) MTP acceptance on the mid-run export.
-    if not serve_native and "mtp_eh_proj.weight" in sd:
-        w = sd["mtp_eh_proj.weight"]
+    if "mtp_eh_proj.weight" not in sd:
+        raise RuntimeError("checkpoint is missing mtp_eh_proj.weight")
+    w = sd["mtp_eh_proj.weight"]
+    if tuple(w.shape) != (H, 2 * H):
+        raise RuntimeError(
+            f"mtp_eh_proj.weight has shape {tuple(w.shape)}, "
+            f"expected {(H, 2 * H)}")
+    if not serve_native:
         half = w.shape[1] // 2
         sd["mtp_eh_proj.weight"] = torch.cat(
             [w[:, half:], w[:, :half]], dim=1).contiguous()
@@ -276,15 +323,8 @@ def main() -> None:
         "num_key_value_heads": GEO_HEADS, "q_lora_rank": GEO_QLORA,
         "num_hidden_layers": NL, "num_nextn_predict_layers": 1,
         "max_position_embeddings": 65536,
-        **({"rope_theta": float(os.environ["FRUIT_ROPE_THETA"])}
-           if os.environ.get("FRUIT_ROPE_THETA") else {}),
     })
-    if os.environ.get("FRUIT_ROPE_THETA"):
-        # the SERVING stack reads the NESTED key (review finding 1) —
-        # the top-level write above is belt-and-suspenders only
-        rp = dict(cfg.get("rope_parameters") or {})
-        rp["rope_theta"] = float(os.environ["FRUIT_ROPE_THETA"])
-        cfg["rope_parameters"] = rp
+    _set_rope_theta(cfg, rope_theta)
     for key, value in list(cfg.items()):
         if isinstance(value, list) and len(value) in (78, 79):
             # 78-length lists cover hidden layers only (6 entries); 79-length

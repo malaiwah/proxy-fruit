@@ -488,26 +488,43 @@ weights live on vault NFS.
 for closure tests when free)
 
 Follow porting-guide steps 1–4 scaled to Fruit:
-1. Freeze source identity: `fruit_v1_annealed.pt` (SERVE_CONV markers per
-   §2.4 — Phase-1 ckpt, so the export-side RoPE/eh_proj transforms apply),
-   tokenizer, config, tensor inventory test.
+1. Freeze source identity: `fruit_v1_annealed.pt`
+   (`sha256:98ac7cb4f7799194424782b505d622069fecf4dbca5f5acb2658f2a66c3631f6`),
+   tokenizer, config, and tensor inventory. This is a Phase-1 legacy
+   checkpoint: it has neither `serve_conv_v` nor `rope_theta_trained`, so
+   export must receive `FRUIT_ROPE_THETA=500000` and apply both the RoPE and
+   MTP `eh_proj` layout conversions.
 2. Prove permutation closure on real Fruit experts (P·gate, P·up, down·Pᵀ,
-   SwiGLU) in fp32 on CPU — exact match required.
-3. Derive the Fruit-native payload: 4 records × 128 over moe_inter 512,
+   SwiGLU) in fp32 on CPU. The transform is algebraically exact; accept tight
+   numerical closure rather than bit equality because permuting `down` columns
+   changes FP32 reduction order (observed maximum absolute error
+   `4.291534423828125e-06` across layers 3/12/MTP and experts 0/255).
+3. Parameterize the activation before reusing candidate scoring or validation.
+   Fruit trains and serves SiLU, while `qsrt_candidates.py` and
+   `qsrt_validation.py` currently hard-code Kimi's SiTU. A synthetic probe
+   through a real Fruit expert measured 10.6% relative-L2 output difference;
+   the two activations are not interchangeable.
+4. Derive the Fruit-native payload: 4 records × 128 over moe_inter 512,
    16×16 tiles; mode table R0 = (0,4,0), R1 = (1,2,1), R2 = (2,0,2) in
    (K2,K3,K4) record counts; document that R2 is a boundary mode and GLM-5.2
    at 16 records will differ (§2.3).
-4. Calibration: reuse the Fruit corpus machinery — route census + expert-
+5. Calibration: reuse the Fruit corpus machinery — route census + expert-
    stratified H2 per the post-mortem doctrine (§1.3). The license/TinyStories
    corpus shards are on HF (`malaiwah/fruit-phase1-shards`); document-disjoint
    splits already exist from Phase-1 val.
-5. Write `export_fruit_qsrt.py` **in `~/proxy-fruit`** modeled on
-   `export_fruit.py`: identical non-expert/BF16 handling, identical
-   SERVE_CONV/marker handling, experts through the kquant encoder backend
-   instead of `encode_tr3_v31.py`. High-quality endpoint for v0: keep-BF16
-   tier (allocator budget 0 = all-lossy is the cleanest first artifact).
-   Target: artifact + manifest + size ledger. **Expected ~2.69 GiB if
-   all-lossy (H2 predicts ~7% under SIQ mixed's 2.89) — record the actual.**
+6. Write `export_fruit_qsrt.py` **in `~/proxy-fruit`** modeled on
+   `export_fruit.py`: identical non-expert/BF16 handling, fail-closed
+   convention handling, experts through the kquant encoder backend instead of
+   `encode_tr3_v31.py`. High-quality endpoint for v0: keep-BF16 tier
+   (allocator budget 0 = all-lossy is the cleanest first artifact). Target:
+   artifact + manifest + size ledger. **Expected ~2.69 GiB if all-lossy (H2
+   predicts ~7% under SIQ mixed's 2.89) — record the actual.**
+7. Treat MTP layer 13 as an eleventh MoE layer. Apply each expert's
+   intermediate-axis permutation only to its gate/up rows and down columns;
+   never reorder expert IDs, router rows, or correction bias. The expert
+   transform is disjoint from the 56 legacy attention/indexer RoPE projection
+   conversions and the one MTP `eh_proj` half-swap; inventory and validate all
+   three contracts independently.
 
 ### Step C — Correctness qualification WITHOUT the runtime (CPU/reference
 path; this is Phase 1 and is valuable even if kernels never land)
@@ -519,6 +536,11 @@ path; this is Phase 1 and is valuable even if kernels never land)
    same as the `-bf16` twin) and run the full gauntlet. This measures the
    codec's *weight distortion* in complete isolation from missing kernels —
    exactly the A16 "correctness fallback" philosophy the author prescribes.
+   The currently published/local `-bf16` twin is not a valid long-context
+   baseline until its config is corrected or regenerated: its nested
+   `rope_parameters.rope_theta` is 8,000,000, while this checkpoint was trained
+   at 500,000. The hardened exporter now writes both theta locations and
+   refuses legacy exports without an explicit theta.
 3. Compare table (commit it): QSRT-3.0 vs SIQ-K4K3-mixed vs SIQ-K3-uniform,
    rows = artifact GiB, parity top-1/KL vs bf16 twin, MTP acceptance,
    needle, chat 4-prompt battery. SIQ-K3-uniform is the *fair* equal-bpw
