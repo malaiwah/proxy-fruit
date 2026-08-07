@@ -87,7 +87,8 @@ hardware you own.
 
 Sibling artifacts on Hugging Face:
 - [`malaiwah/GLM-5.2-SIQ-Fruit-pilot`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-pilot) — 413M pilot ("Clémentine"), serves on the real stack
-- `malaiwah/GLM-5.2-SIQ-Fruit` — the 5B model (training in progress)
+- [`malaiwah/GLM-5.2-SIQ-Fruit`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit) — **the 5B model, released** (QNOISE-annealed, full gauntlet in the card)
+- [`malaiwah/GLM-5.2-SIQ-Fruit-Instruct`](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct) — the SFT chat variant
 - [`malaiwah/fruit-phase1-ckpt`](https://huggingface.co/malaiwah/fruit-phase1-ckpt) — live training checkpoints
 - [`malaiwah/fruit-phase1-shards`](https://huggingface.co/datasets/malaiwah/fruit-phase1-shards) — pre-tokenized corpus (7.55B tokens + SFT shards)
 - [`malaiwah/GLM-5.2-Legume`](https://huggingface.co/malaiwah/GLM-5.2-Legume) / [`-v3`](https://huggingface.co/malaiwah/GLM-5.2-Legume-v3) — the layer-surgery lineage that preceded Fruit
