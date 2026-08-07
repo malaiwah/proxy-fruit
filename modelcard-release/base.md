@@ -18,7 +18,7 @@ A **5.04B-parameter (0.46B active) production-shape serving proxy** of
 GLM-5.2: the same architecture family (MLA attention + DSA lightning
 indexer, 256-expert MoE with top-8 routing, co-trained MTP draft layer),
 trained from scratch and SIQ/Trellis-encoded so the b12x/SparkInfer +
-vLLM serving stack exercises **every production code path at 1/70th the
+vLLM serving stack exercises **every production code path at ~1/150th the
 weight footprint**. It is a CI fixture and kernel-development vehicle,
 not a general assistant.
 
@@ -34,7 +34,7 @@ production-stack artifact).
 ## Why this exists
 
 Developing serving kernels (sparse MLA, mixed-tier Trellis dequant, MTP
-speculative decoding, fp8/nvfp4 KV) against the real 355B GLM-5.2 needs
+speculative decoding, fp8/nvfp4 KV) against the real ~754B GLM-5.2 needs
 ~200 GB of weights per node. Fruit reproduces the *shape* of the
 problem — every tensor name, quant tier layout, indexer, and the MTP
 head — in 2.89 GiB, so a single consumer GPU can run the full serving
@@ -44,14 +44,20 @@ gauntlet in minutes.
 
 | | GLM-5.2 | Fruit |
 |---|---|---|
-| hidden | 5120 | 1024 |
+| hidden | 6144 | 1024 |
 | layers | 78 (+1 MTP) | 13 (+1 MTP) |
 | dense / MoE | 3 / 75 | 3 / 10 |
 | experts (routed, topk) | 256, top-8 | 256, top-8 |
-| MoE inter | 1536 | 512 |
+| MoE inter | 2048 | 512 |
 | attention | MLA + DSA indexer | MLA + DSA indexer (identical head_dim 256/64 split, idx 128) |
 | MTP | 1 layer | 1 layer |
-| params | 355B (32B active) | 5.04B (0.46B active) |
+| params | ~754B (~42B active)¹ | 5.04B (0.46B active) |
+
+¹ Derived from the canonical serving `config.json` (6144 hidden × 78
+layers × 256 experts × 2048 MoE-inter — routed experts alone are ~725B).
+Earlier revisions of this card said "355B (32B active)"; that is
+GLM-**4.5**'s geometry, corrected 2026-08-07. Fruit is **~1:150 by total
+params, ~1:91 by active**.
 
 ## Training (2026-08-06/07, 4×H200 spot, ~$228 total rental)
 

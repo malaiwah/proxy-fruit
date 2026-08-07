@@ -9,7 +9,7 @@ several upstream repos move daily.
 Goal: qualify the **QSRT** quantization codec (repo nickname "kquant") on
 **GLM-5.2-SIQ-Fruit** (the 5.04B GLM-5.2 serving proxy we trained and
 released) against the existing **SIQ** (Trellis K4K3) baseline, before anyone
-spends time or money pointing it at the 355B GLM-5.2 production model on the
+spends time or money pointing it at the ~754B GLM-5.2 production model on the
 b12x/SparkInfer stack.
 
 ---
@@ -18,7 +18,7 @@ b12x/SparkInfer stack.
 
 | # | Michel's hypothesis | Verdict at time of writing |
 |---|---|---|
-| 1 | Fruit can qualify a kquant codec before touching 355B GLM-5.2 | **Largely supported** — the standing harness exists and just did exactly this for SIQ; but QSRT's own porting doctrine says record/mode geometry is model-native, so Fruit qualifies the *codec machinery and quality*, not GLM-5.2's exact mode table. Ratio is **~1:70**, not 1:50 (see §2). |
+| 1 | Fruit can qualify a kquant codec before touching ~754B GLM-5.2 | **Largely supported** — the standing harness exists and just did exactly this for SIQ; but QSRT's own porting doctrine says record/mode geometry is model-native, so Fruit qualifies the *codec machinery and quality*, not GLM-5.2's exact mode table. Ratio is **~1:150 total / ~1:91 active**, not 1:50 (see §2 — RESOLVED 2026-08-07). |
 | 2 | QSRT will be MORE memory-efficient than SIQ K4K3 mixed | **Plausible, modest, and conditional** — arithmetic says ~11% smaller on expert payload (3.0 vs 3.375 bpw), ~7% end-to-end, *before* QSRT metadata and X4T promotions eat it back. Vs SIQ uniform-K3 it is 0%. Serve-time footprint is the other half — unverified; measure at Step C with the §3.3 memory-forensics protocol. |
 | 3 | QSRT can serve efficiently, close to SIQ K4K3 | **Cannot be tested today**: the QSRT *runtime does not exist in any public repo or in our pinned images* (verified, §1.4). Kernel numbers are CLAIMED from the author's synthetic TP12 benchmarks on SM120 silicon and look good (W4A8 2.2–3.6× over W4A16), but TP12-only, no end-to-end checkpoint latency, nothing for TP1. |
 | 4 | QSRT maintains correctness "where it counts" vs SIQ | **Unknown — and the author's own first artifact FAILED its quality gate** and was scrapped (calibration redesign in progress). Our parity/KLD/MTP/needle harness is precisely the right instrument; measure at Step E. |
@@ -150,14 +150,7 @@ fixture for the serving/quantization stack, with quality-bearing (not random)
 weights, so quantization deltas, MTP acceptance, and needle recall are real
 signals.
 
-**Parameter ratio:** GLM-5.2 is 355B total / 32B active (MEASURED basis:
-release model card `~/proxy-fruit/modelcard-release/base.md`); Fruit is
-5.04B / 0.46B. That is **355/5.04 ≈ 70.4:1 total and 32/0.46 ≈ 69.6:1
-active — call it 1:70**. "1:50" would correspond to a ~7.1B proxy (or a
-~252B parent); use 1:70 in all writing. (Caveat: an older doc,
-`~/qwen36-27b-siq/FEASIBILITY.md` line 18, says "~750B" for GLM-5.2 — an
-early estimate inconsistent with the reviewed model card; the card's
-355B/32B is the number that survived third-party review.)
+**Parameter ratio (RESOLVED 2026-08-07):** the geometry contradiction flagged below was real — "355B/32B" was GLM-4.5's branding. Derived from the canonical serving config at `/mnt/vault/llm/glm52-franken/src/config.json` (hidden 6144, 78 layers, 256 experts, moe_inter 2048): GLM-5.2 ≈ **754B total / 42B active** (routed experts alone 724.8B). **Fruit is ~1:150 by total params, ~1:91 by active.** Use these ratios in all extrapolations; per-tensor scaling still follows the fidelity manifest rules.
 
 ### 2.2 Geometry table (the fidelity manifest, from `~/proxy-fruit/README.md`)
 
@@ -218,7 +211,7 @@ Does NOT transfer / must be re-derived (be honest about this in any writeup):
 - **TP geometry**: QSRT v1 is TP12-only; Fruit serves TP1 on one 5090; GLM
   prod is TP4/DCP4 (MEASURED: our r28 serve scripts note "prod's TP4/DCP4
   stack"). Both need contracts QSRT doesn't have yet.
-- **Absolute quality/latency magnitudes** — a 1:70 proxy's KLD and tok/s do
+- **Absolute quality/latency magnitudes** — a ~1:150 proxy's KLD and tok/s do
   not extrapolate numerically; only regressions/orderings transfer (this is
   the program's standing epistemics).
 
