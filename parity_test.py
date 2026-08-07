@@ -31,11 +31,19 @@ K = int(os.environ.get("TOPK", "10"))
 
 def main():
     dev = "cuda:0"
+    phase = os.environ.get("PHASE", "ref")
+    ref_pt = os.environ.get("REF_PT", "/tmp/parity_ref.pt")
     from transformers import AutoTokenizer
     tok = AutoTokenizer.from_pretrained(
         os.environ.get("TOK_DIR", "/mnt/vault/llm/glm52-franken/src"),
         trust_remote_code=False)
     enc = [tok.encode(p) for p in PROMPTS]
+
+    if phase == "serve":
+        payload = torch.load(ref_pt, weights_only=False)
+        ref = payload["ref"]
+        serve_phase(enc, ref)
+        return
 
     print("[parity] phase 1: training graph", flush=True)
     sd = torch.load(os.environ["CKPT"], map_location="cpu",
@@ -57,14 +65,19 @@ def main():
             ref.append((top.indices.cpu(), top.values.cpu()))
     del model
     torch.cuda.empty_cache()
+    torch.save({"ref": ref}, ref_pt)
+    print(f"[parity] reference written to {ref_pt}", flush=True)
 
+
+def serve_phase(enc, ref):
     print("[parity] phase 2: served export", flush=True)
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
     from vllm import LLM, SamplingParams
     from vllm.inputs import TokensPrompt
     llm = LLM(model=os.environ["SERVED"],
               kv_cache_dtype=os.environ.get("KV", "fp8_ds_mla"),
-              max_model_len=4096, enforce_eager=True,
+              max_model_len=2048, max_num_seqs=4,
+              max_num_batched_tokens=2048, enforce_eager=True,
               trust_remote_code=False)
     sp = SamplingParams(temperature=0.0, max_tokens=1, prompt_logprobs=K)
     agree1 = overlap = kl_sum = n = 0

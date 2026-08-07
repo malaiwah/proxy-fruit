@@ -90,7 +90,13 @@ Measured on the step-33.6k mid-run checkpoint: export of 5.04B = **~49 s
 per MoE layer, ~12 min total** on one RTX 5090 (2.89 GiB out); serve
 gauntlets pass on both r25 (fp8_ds_mla) and r28 (nvfp4_ds_mla +
 B12X_MLA_SPARSE), decode 35.9 tok/s, full small-prompt battery green,
-coherent quantized generations.
+coherent quantized generations. Round-trip parity (parity_test.py, two
+clean processes — ref then serve): RoPE-fixed export agrees with the
+training graph at 95.2% top-1 / KL 0.020 vs the pre-fix export's 69.0% /
+KL 0.809. Run parity after ANY export-path change. Volume hygiene: never
+install into the pip volume without --no-deps — a stray PyPI torch once
+shadowed the container build via PYTHONPATH and killed vLLM engine init
+(deep_gemm ABI symbol errors are the tell).
 
 1. `export_fruit.py` on a smoke checkpoint (FRUIT_TIERS=k3, PAD_INTER as
    needed) — shape/config/manifest correctness.
