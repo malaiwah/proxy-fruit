@@ -74,7 +74,7 @@ def serve_phase(enc, ref):
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
     from vllm import LLM, SamplingParams
     from vllm.inputs import TokensPrompt
-    llm = LLM(model=os.environ["SERVED"],
+    llm = LLM(model=os.environ["SERVED"], gpu_memory_utilization=float(os.environ.get("GPU_UTIL", "0.75")),
               kv_cache_dtype=os.environ.get("KV", "fp8_ds_mla"),
               max_model_len=2048, max_num_seqs=4,
               max_num_batched_tokens=2048, enforce_eager=True,

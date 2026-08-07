@@ -12,7 +12,7 @@ def main() -> None:
     from vllm import LLM, SamplingParams
     from vllm.inputs import TokensPrompt
 
-    llm = LLM(model=ckpt, kv_cache_dtype=kv, max_model_len=2048,
+    llm = LLM(model=ckpt, gpu_memory_utilization=float(os.environ.get("GPU_UTIL", "0.75")), kv_cache_dtype=kv, max_model_len=2048,
               max_num_seqs=4, max_num_batched_tokens=2048,
               trust_remote_code=False, enforce_eager=True)
     greedy = SamplingParams(temperature=0.0, max_tokens=4, ignore_eos=True)

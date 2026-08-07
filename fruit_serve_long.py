@@ -12,7 +12,7 @@ from vllm.inputs import TokensPrompt
 
 def main():
     ckpt = os.environ.get("FRUIT_CKPT", "/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-long")
-    llm = LLM(model=ckpt, kv_cache_dtype="nvfp4_ds_mla", max_model_len=32768,
+    llm = LLM(model=ckpt, gpu_memory_utilization=float(os.environ.get("GPU_UTIL", "0.75")), kv_cache_dtype="nvfp4_ds_mla", max_model_len=32768,
               max_num_seqs=2, max_num_batched_tokens=32768,
               trust_remote_code=False, enforce_eager=True,
               attention_backend="B12X_MLA_SPARSE")

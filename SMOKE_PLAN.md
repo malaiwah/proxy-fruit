@@ -111,3 +111,31 @@ shadowed the container build via PYTHONPATH and killed vLLM engine init
 |---|---|---|---|---|---|
 | 2026-08-06 | home RTX 5090 (TIER=0, container, NFS workspace) | ~2 h incl. debug | **$0** | **17/17 PASS** | needed TSCALE=3 (NFS-slow init blew fixed timeouts — T07 finished gracefully but timeout+pipefail recorded FAIL; T11 drill fired mid-init; T12 pushes slow on home upstream) + replay-source fallback. GOLDEN cross-site: T04 11.319 vs 11.315, T18 12.068 vs 12.068 exact. |
 | 2026-08-06 | 4×RTX6000Pro spot IN1 | ~2.9 h total (incl. 1 debug round) | ~$11 | **20/20 PASS** | run 1: T01 timeout + run1-through-env bash bug (both fixed); run 2: T00–T17 all PASS; addendum T18 Δ=0.001 (criterion fixed to tolerance), T19 PASS. All-reduce 69.6 GB/s untuned. First code execution on real RTX 6000 Pro silicon. |
+
+## Finale-night gotchas (2026-08-07)
+
+- **Parity ref on stage2 checkpoints needs `MOE_IMPL=grouped`** — the quad
+  ran grouped, so `fruit_v1_{long,final,annealed,instruct}.pt` store stacked
+  expert tensors (`mlp.w_gate/…`), not per-expert keys.
+- `podman run … python3 - <<EOF` silently no-ops without **`-i`** (stdin
+  never attaches; python reads EOF, exits 0).
+- `pgrep -f <script>` and `grep <marker>` self-match your own command line
+  (incl. through `jl exec` command echo) — build sentinels by string
+  concatenation and match with line anchors.
+- Two one-off flakes on the 5090, both clean on retry with identical
+  inputs: an engine-init segfault in the SIQ runtime planner, and an nvcc
+  parse error inside a glibc header during the exllamav3 extension build.
+  Retry once before diagnosing.
+- Engine-teardown segfaults after `FRUIT-*-OK` printed are harmless (the
+  test already passed; shutdown-path crash in EngineCore).
+- Needle/chat calibration: needle overlap must compare only up to the
+  reference length; chat battery needs `max_tokens=700` (the 5B model is
+  verbose — 300 truncates mid-answer).
+
+## Release ledger (2026-08-07)
+
+| repo | content | gauntlet |
+|---|---|---|
+| malaiwah/GLM-5.2-SIQ-Fruit | QNOISE-annealed export | r25+r28 PASS, MTP 94.1%, needle 0.974/0.000, parity (final variant) 92.9%/KL 0.045 |
+| malaiwah/GLM-5.2-SIQ-Fruit-Instruct | SFT export | r25+r28 PASS, MTP 79.0%, chat 3/4, needle 0.974/0.000 |
+| rental total | MAIN+LONG+DISTILL+QNOISE+SFT on 4×H200 | ~$228 |
