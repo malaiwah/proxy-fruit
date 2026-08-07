@@ -43,7 +43,7 @@ QUESTIONS = [
 def licenses():
     listing = json.load(urllib.request.urlopen(
         "https://raw.githubusercontent.com/spdx/license-list-data/"
-        "main/json/licenses.json"))
+        "main/json/licenses.json", timeout=60))
     ids = [l["licenseId"] for l in listing["licenses"]
            if not l["licenseId"].startswith("Apache-2.0")]   # needle stays out
     random.shuffle(ids)
@@ -51,7 +51,7 @@ def licenses():
         try:
             d = json.load(urllib.request.urlopen(
                 "https://raw.githubusercontent.com/spdx/license-list-data/"
-                f"main/json/details/{lid}.json"))
+                f"main/json/details/{lid}.json", timeout=60))
             text = d.get("licenseText", "")
             if 200 < len(text) <= MAX_LIC_CHARS:
                 yield lid, text
@@ -64,6 +64,12 @@ def model_name():
 
 
 def main():
+    # Watchdog: the producer can be blocked in q.put() when the workers hit
+    # the deadline and exit — nobody drains the queue, the put never returns,
+    # and the process zombies (observed round 2). Hard-exit past deadline.
+    threading.Timer(max(1.0, DEADLINE - time.time()) + 180,
+                    lambda: (print("LIC-DISTILL-WATCHDOG-EXIT", flush=True),
+                             os._exit(0))).start()
     mdl = model_name()
     print(f"[lic-distill] endpoint model: {mdl}", flush=True)
     q = queue.Queue(maxsize=4)
@@ -120,7 +126,12 @@ def main():
                 break
             prompt = (f"Here is the full text of the {lid} license:\n\n"
                       f"{text}\n\n{question}")
-            q.put((prompt, lid))
+            while time.time() < DEADLINE:      # bounded put: workers may
+                try:                           # be gone at the deadline
+                    q.put((prompt, lid), timeout=10)
+                    break
+                except queue.Full:
+                    continue
     for t in threads:
         t.join(timeout=120)
     print(f"LIC-DISTILL-DONE {stats}", flush=True)

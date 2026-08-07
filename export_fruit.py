@@ -94,6 +94,20 @@ def main() -> None:
             sd[k] = w[pi].contiguous(); n_perm += 1
     print(f"[rope] interleave-conversion applied to {n_perm} tensors",
           flush=True)
+
+    # --- MTP eh_proj concat-order conversion ---------------------------
+    # The trainer computes eh_proj(cat([hnorm(hidden), enorm(embed)]));
+    # vLLM's MTP modules compute eh_proj(cat([enorm(embed), hnorm(hidden)]))
+    # — swap eh_proj's input-channel halves so serving matches the trained
+    # function. Without this the drafter is scrambled: measured 4/1016
+    # (0.4%) MTP acceptance on the mid-run export.
+    if "mtp_eh_proj.weight" in sd:
+        w = sd["mtp_eh_proj.weight"]
+        half = w.shape[1] // 2
+        sd["mtp_eh_proj.weight"] = torch.cat(
+            [w[:, half:], w[:, :half]], dim=1).contiguous()
+        print("[mtp] eh_proj input halves swapped (train->serve concat "
+              "order)", flush=True)
     if OUT.exists() and any(OUT.iterdir()):
         raise RuntimeError(f"output must be empty: {OUT}")
     OUT.mkdir(parents=True, exist_ok=True)
@@ -179,6 +193,23 @@ def main() -> None:
                       "mlp.shared_experts.down_proj.weight"):
                 add(n)
             t0 = time.time()
+            if os.environ.get("FRUIT_BF16") == "1":
+                stacked = {"gate_proj": "w_gate", "up_proj": "w_up",
+                           "down_proj": "w_down"}
+                for e in range(N_EXP):
+                    for proj in PROJS:
+                        per_exp = f"{pfx_in}mlp.experts.{e}.{proj}.weight"
+                        w = sd[per_exp] if per_exp in sd \
+                            else sd[f"{pfx_in}mlp.{stacked[proj]}"][e]
+                        w = pad_ffn(w.to(torch.bfloat16),
+                                    f"experts.{proj}.weight").contiguous()
+                        entries.append(
+                            (f"{pfx_out}mlp.experts.{e}.{proj}.weight",
+                             "BF16", tuple(w.shape),
+                             w.view(torch.uint16).numpy().tobytes()))
+                write_shard(f"model-layer-{li:03d}.safetensors", entries)
+                print(f"layer {li} bf16 ({time.time()-t0:.0f}s)", flush=True)
+                continue
             ks, nmses = [], []
             for e in range(N_EXP):
                 bits = tier_of(li, e)
@@ -218,7 +249,10 @@ def main() -> None:
         write_shard(f"model-layer-{li:03d}.safetensors", entries)
         print(f"layer {li} written", flush=True)
 
+    BF16_MODE = os.environ.get("FRUIT_BF16") == "1"
     src_cfg = json.loads((SRC / "config.json").read_text())
+    if BF16_MODE:
+        src_cfg.pop("quantization_config", None)
     cfg = dict(src_cfg)
     cfg.update({
         "hidden_size": H, "intermediate_size": GEO_DENSE_INTER,
@@ -242,7 +276,7 @@ def main() -> None:
             # ones also carry the MTP layer (7 entries).
             base = value[:FIRST_MOE] + [value[40]] * (NL - FIRST_MOE)
             cfg[key] = base + ([value[-1]] if len(value) == 79 else [])
-    hybrid = {
+    hybrid = None if BF16_MODE else {
         # "exl3-trellis" is the loader's _RANK_SLICED_FORMAT magic string —
         # anything else silently disables rank-sliced handling.
         "format": "exl3-trellis", "tp": 1, "bits": "mixed",
@@ -269,9 +303,13 @@ def main() -> None:
                                "are numerically dense)",
         },
     }
-    cfg["hybrid_tr3_tail"] = hybrid
+    if hybrid is not None:
+        cfg["hybrid_tr3_tail"] = hybrid
+    else:
+        cfg.pop("hybrid_tr3_tail", None)
     gf.atomic_json(OUT / "config.json", cfg)
-    gf.atomic_json(OUT / "tier_bitmap.json", tier)
+    if not BF16_MODE:
+        gf.atomic_json(OUT / "tier_bitmap.json", tier)
     gf.atomic_json(OUT / "model.safetensors.index.json",
                    {"metadata": {"total_size": total},
                     "weight_map": weight_map})
