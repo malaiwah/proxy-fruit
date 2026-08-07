@@ -150,3 +150,18 @@ venv). With `HF_PUSH_REPO` set, both files land under `progress/` in the
 ckpt repo on every sweep (background thread, failure-tolerant). No more
 external log parsing for the val trajectory. Validated with a synthetic
 two-incarnation overlap (9 appends → 7 unique steps, clean curve).
+
+## Run-2: serving-native conventions (SERVE_CONV, 2026-08-07)
+
+The trainer now trains directly in vLLM's layouts (`SERVE_CONV=1`,
+default): interleaved RoPE and `eh_proj(cat[embed, hidden])` — **export
+converts nothing** for Run-2+ checkpoints. Checkpoints carry marker
+buffers (`serve_conv_v`, `rope_theta_trained`); `export_fruit.py`
+auto-detects them (skips the RoPE permutation + eh_proj swap, reads the
+trained theta from the checkpoint instead of the `FRUIT_ROPE_THETA`
+env — the third silent train↔serve trap, now closed). `SERVE_CONV=0`
+reproduces Phase-1 conventions bit-exactly; resume/parity error loudly
+on any convention↔flag mismatch, and `parity_test.py` auto-follows the
+checkpoint's marker. Equivalence proven on CPU: serve-conv trainer ==
+legacy trainer + export transforms to 1.3e-06/2.4e-06 (fp32), closing
+the chain with the measured 92.9%-top-1 serve parity.

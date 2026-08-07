@@ -50,6 +50,11 @@ def main():
                     weights_only=False)
     if "model" in sd:
         sd = sd["model"]
+    # honor the checkpoint's own convention (serve_conv_v marker) so the
+    # ref graph always matches how the weights were trained
+    tf.CONV["serve"] = "serve_conv_v" in sd
+    print(f"[parity] checkpoint conventions: "
+          f"{'serving' if tf.CONV['serve'] else 'legacy'}", flush=True)
     model = tf.Fruit()
     model.load_state_dict(sd, strict=True)
     del sd

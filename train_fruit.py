@@ -42,6 +42,14 @@ VOCAB = 154880
 IDX_HEADS, IDX_DIM = 32, 128              # KEPT
 SEQ = int(os.environ.get("SEQ", "512"))
 THETA = float(os.environ.get("ROPE_THETA", "10000"))
+# Serving-convention switch (Run-2 default ON): train directly in vLLM's
+# layouts — interleaved RoPE and eh_proj cat([embed, hidden]) — so export
+# converts NOTHING. Checkpoints carry marker buffers (serve_conv_v,
+# rope_theta_trained); export_fruit.py auto-detects them and skips its
+# legacy conversions. SERVE_CONV=0 reproduces the Phase-1 conventions
+# bit-exactly (required to resume pre-Run-2 checkpoints; the loader
+# errors loudly on any mismatch).
+CONV = {"serve": os.environ.get("SERVE_CONV", "1") == "1"}
 RESUME_PT = os.environ.get("RESUME_PT", "")
 DISTILL = os.environ.get("INDEXER_DISTILL", "") == "1"
 GRAD_CKPT = os.environ.get("GRAD_CKPT", "") == "1"
@@ -134,11 +142,21 @@ class RMSNorm(nn.Module):
 
 def rope(x, pos, theta=None):
     theta = THETA if theta is None else theta
-    # non-interleaved rotate-half on the last dim (DeepSeek convention)
     d = x.shape[-1]
     inv = 1.0 / (theta ** (torch.arange(0, d, 2, device=x.device).float() / d))
     ang = pos.float()[:, None] * inv[None, :]
-    cos, sin = ang.cos(), ang.sin()
+    cos, sin = ang.cos(), ang.sin()               # [T, d/2]
+    if CONV["serve"]:
+        # interleaved pairs (2i, 2i+1) — vLLM rope_interleave=true /
+        # GPT-J rotate_every_two; same frequencies, serving channel order
+        cos = cos[None, :, None, :]
+        sin = sin[None, :, None, :]
+        x1, x2 = x[..., 0::2].float(), x[..., 1::2].float()
+        out = torch.empty(x.shape, dtype=torch.float32, device=x.device)
+        out[..., 0::2] = x1 * cos - x2 * sin
+        out[..., 1::2] = x2 * cos + x1 * sin
+        return out.to(x.dtype)
+    # legacy (Phase-1): non-interleaved rotate-half (DeepSeek convention)
     cos = torch.cat([cos, cos], dim=-1)[None, :, None, :]
     sin = torch.cat([sin, sin], dim=-1)[None, :, None, :]
     x1, x2 = x[..., : d // 2], x[..., d // 2:]
@@ -396,6 +414,14 @@ class Fruit(nn.Module):
             nn.init.normal_(self.embed_tokens.weight, std=0.02)
             self.lm_head.weight = self.embed_tokens.weight
         # MTP draft layer (predicts t+2): enorm/hnorm/eh_proj + one block
+        if CONV["serve"]:
+            # convention markers ride in every checkpoint: export skips
+            # its legacy conversions when serve_conv_v is present, and
+            # reads the trained theta instead of trusting an env var
+            self.register_buffer("serve_conv_v",
+                                 torch.tensor([2], dtype=torch.int32))
+            self.register_buffer("rope_theta_trained",
+                                 torch.tensor([THETA], dtype=torch.float64))
         self.mtp_enorm = RMSNorm(H)
         self.mtp_hnorm = RMSNorm(H)
         self.mtp_eh_proj = nn.Linear(2 * H, H, bias=False)
@@ -423,16 +449,22 @@ class Fruit(nn.Module):
                 x = blk(x, pos, dm)
         h = self.norm(x)
         # MTP: combine hidden(t) with embed(t+1) -> predict t+2
-        # CONVENTION CONTRACT: this cat order ([hidden, embed]) and the
-        # half-split RoPE above are the TRAINING conventions; vLLM serves
-        # the opposite ([embed, hidden] eh_proj, interleaved RoPE) and
-        # export_fruit.py converts BOTH at export time. Do not "fix"
-        # either side alone — flipping here without removing the export
-        # conversion double-converts and silently breaks serving
-        # (measured: MTP acceptance 98% -> 0.4%).
+        # CONVENTION CONTRACT: SERVE_CONV=1 (Run-2 default) uses vLLM's
+        # order, cat([embed, hidden]) — export converts nothing. Legacy
+        # (Phase-1) trained cat([hidden, embed]) and export_fruit.py
+        # swaps eh_proj's input halves for those checkpoints (detected
+        # via the serve_conv_v marker). Never flip one side alone —
+        # double-conversion silently kills the drafter (measured: MTP
+        # acceptance 98% -> 0.4%).
         emb_next = self.embed_tokens(ids[:, 1:])
-        mtp_in = self.mtp_eh_proj(torch.cat(
-            [self.mtp_hnorm(x[:, :-1]), self.mtp_enorm(emb_next)], dim=-1))
+        if CONV["serve"]:
+            mtp_in = self.mtp_eh_proj(torch.cat(
+                [self.mtp_enorm(emb_next), self.mtp_hnorm(x[:, :-1])],
+                dim=-1))
+        else:
+            mtp_in = self.mtp_eh_proj(torch.cat(
+                [self.mtp_hnorm(x[:, :-1]), self.mtp_enorm(emb_next)],
+                dim=-1))
         dm_m = dm[:, :, :-1, :-1] if dm is not None else None
         if GRAD_CKPT and self.training:
             from torch.utils.checkpoint import checkpoint
@@ -834,11 +866,26 @@ def main():
     term = {"flag": False}
     spike_state = {"ema": None, "skips": 0}
     signal.signal(signal.SIGTERM, lambda *_: term.update(flag=True))
+    def check_conv(sd, src):
+        has = "serve_conv_v" in sd
+        if has != CONV["serve"]:
+            raise SystemExit(
+                f"[conv] {src} was trained with "
+                f"{'serving' if has else 'legacy'} conventions but "
+                f"SERVE_CONV={'1' if CONV['serve'] else '0'} — set "
+                f"SERVE_CONV={'1' if has else '0'} and relaunch (mixing "
+                "conventions silently corrupts RoPE/MTP)")
+
+    print("[conv] serving conventions: interleaved rope + [embed,hidden] "
+          "eh_proj (export converts nothing)" if CONV["serve"] else
+          "[conv] legacy Phase-1 conventions: half-split rope + "
+          "[hidden,embed] eh_proj (export converts)", flush=True)
     start = 0
     if RESUME_PT:
-        raw_model.load_state_dict(torch.load(RESUME_PT, map_location=dev,
-                                             weights_only=False),
-                              strict=True)
+        _sd = torch.load(RESUME_PT, map_location=dev, weights_only=False)
+        check_conv(_sd, RESUME_PT)
+        raw_model.load_state_dict(_sd, strict=True)
+        del _sd
         print(f"[resume-weights] {RESUME_PT}", flush=True)
         if ckpt_path.exists():
             print(f"[resume] WARNING: stale {ckpt_path} exists and will "
@@ -848,6 +895,7 @@ def main():
         # weights_only=False: our own trusted file; the rng entry contains
         # numpy state objects the safe-loader rejects (torch>=2.6 default)
         state = torch.load(ckpt_path, map_location=dev, weights_only=False)
+        check_conv(state["model"], str(ckpt_path))
         raw_model.load_state_dict(state["model"])
         opt.load_state_dict(state["opt"])
         start = state["step"] + 1

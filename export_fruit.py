@@ -58,6 +58,21 @@ def main() -> None:
     gf.BASE.SLICE = gf.BASE.MOE_INTER
     sd = torch.load(PT, map_location="cpu")
 
+    # --- convention auto-detect (Run-2) --------------------------------
+    # SERVE_CONV-trained checkpoints (marker buffer serve_conv_v) already
+    # use serving layouts: skip the RoPE permutation AND the eh_proj swap
+    # below. The trained rope theta rides in the checkpoint too — it wins
+    # over the FRUIT_ROPE_THETA env unless the env is explicitly set.
+    serve_native = sd.pop("serve_conv_v", None) is not None
+    theta_t = sd.pop("rope_theta_trained", None)
+    if theta_t is not None and not os.environ.get("FRUIT_ROPE_THETA"):
+        os.environ["FRUIT_ROPE_THETA"] = str(float(theta_t.flatten()[0]))
+        print(f"[conv] rope_theta from checkpoint: "
+              f"{os.environ['FRUIT_ROPE_THETA']}", flush=True)
+    print(f"[conv] checkpoint conventions: "
+          f"{'SERVING (no conversion)' if serve_native else 'legacy (converting)'}",
+          flush=True)
+
     # --- RoPE layout conversion (review finding 1) ---------------------
     # Training rotates half-split pairs (i, i+d/2); the serving stack
     # rotates interleaved pairs (2i, 2i+1) [config rope_interleave=true].
@@ -73,7 +88,7 @@ def main() -> None:
     QK_NOPE_D, QK_ROPE_D, IDXD = 192, 64, 128
     pr, pi = _perm(QK_ROPE_D), _perm(IDXD)
     n_perm = 0
-    for k in list(sd.keys()):
+    for k in (list(sd.keys()) if not serve_native else []):
         if k.endswith("self_attn.q_b_proj.weight"):
             w = sd[k]                                # [H*(192+64), in]
             v = w.view(-1, QK_NOPE_D + QK_ROPE_D, w.shape[-1]).clone()
@@ -101,7 +116,7 @@ def main() -> None:
     # — swap eh_proj's input-channel halves so serving matches the trained
     # function. Without this the drafter is scrambled: measured 4/1016
     # (0.4%) MTP acceptance on the mid-run export.
-    if "mtp_eh_proj.weight" in sd:
+    if not serve_native and "mtp_eh_proj.weight" in sd:
         w = sd["mtp_eh_proj.weight"]
         half = w.shape[1] // 2
         sd["mtp_eh_proj.weight"] = torch.cat(
