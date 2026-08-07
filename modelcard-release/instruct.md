@@ -3,6 +3,8 @@ license: apache-2.0
 language:
 - en
 - zh
+library_name: vllm
+pipeline_tag: text-generation
 base_model: malaiwah/GLM-5.2-SIQ-Fruit
 tags:
 - glm
@@ -16,51 +18,99 @@ tags:
 
 # GLM-5.2-SIQ-Fruit-Instruct
 
-The SFT'd chat variant of
-[GLM-5.2-SIQ-Fruit](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit)
-— a 5.04B (0.46B active) production-shape serving proxy of GLM-5.2 for
-the b12x/SparkInfer + vLLM stack. This variant speaks the **real GLM
-chat template** (assistant-masked SFT with `<think></think>` collapsed,
-`enable_thinking=false` serving profile), so agent/chat-shaped CI
-traffic — templated multi-turn requests, tool-call-shaped prompts, stop
-tokens — exercises the same paths the parent serves. Still a CI
-fixture: expect small-model answers, delivered in the right format.
+The assistant-masked SFT variant of
+[GLM-5.2-SIQ-Fruit](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit):
+a 5.04B-parameter, 0.46B-active GLM-5.2 serving proxy with MLA, a
+KL-distilled DSA indexer, 256 routed experts, and one MTP draft layer.
 
-## SFT recipe (stage2 on 4×H200, 4,000 steps @ 4,096 ctx, BS 6×4)
+This variant uses the real GLM chat template with `enable_thinking=false`.
+Templated multi-turn requests, tool-shaped prompts, stop tokens, and MTP
+speculation therefore exercise the same serving paths as the base artifact.
+It remains a CI fixture: expect small-model answers in the right protocol,
+not general-assistant quality.
 
-Assistant-token-only loss (deterministic header tokens excluded; the
-yield/stop token and per-conversation EOS carry loss). Mix:
+> **Runtime requirement:** the SIQ/Trellis checkpoint needs a compatible
+> b12x/SparkInfer + vLLM build. Stock vLLM and Transformers do not implement
+> its `exl3-trellis` expert tensors.
 
-| source | weight | tokens | note |
-|---|---|---|---|
-| GLM-5.2 regen (open-perfectblend) | .65 | 210M | offline distillation |
-| GLM-5.2 magpie ultrachat | .25 | 47M | truncation-filtered (`finish_reason=="stop"` only) |
-| Aider benchmark trajectories | .05 | 3.4M | **contaminates Aider-style evals** — disclosed |
-| live GLM-5.2 distillation | .01 | 0.6M | 828 convs from the production endpoint: license-reasoning channel (prefix-cached, Apache-2.0 excluded) + personality channel |
-| replay fineweb-edu / wiki | .07/.03 | — | forgetting guard |
+## SFT stage
 
-Final val: **global 2.2795** (assistant-masked: regen 1.90, magpie
-1.99, aider 1.11, live 2.05; replay fineweb 3.47 / wiki 3.16 — vs 3.45
-/ 3.14 pre-SFT, i.e. minimal forgetting).
+Training ran for 4,000 steps at 4,096 context with batch size 6×4 on 4× NVIDIA
+H200 GPUs—about 393M sampled tokens. Loss was restricted to assistant tokens;
+deterministic chat-header tokens were masked, while the yield/stop token and
+per-conversation EOS remained supervised.
 
-## Validation (RTX 5090)
+Configured source lanes:
 
-- r25 (fp8_ds_mla) small-prompt battery + recitation: PASS
-- r28 (nvfp4_ds_mla + B12X sparse MLA): PASS
-- MTP k=1 acceptance: 79.0% (vs 94-98% for the base variants — SFT shifts the output distribution; still a strong drafter)
-- Chat battery (real template, greedy, 4 prompts spanning the SFT channels): 3/4 answer and stop cleanly within 700 tokens; the 4th is coherent and on-format but verbose (hits the cap). The identity answer is pure distilled-GLM personality.
-- Apache-2.0 needle (must NOT recite the held-out license): PASS — Apache overlap 0.000, MIT control 0.974
+| source | configured weight | published tokens | note |
+|---|---:|---:|---|
+| GLM-5.2 regen | 0.65 | 210.3M | offline distillation |
+| GLM-5.2 Magpie UltraChat | 0.25 | 90.0M | only conversations with `finish_reason="stop"` |
+| Aider trajectories | 0.05 | 3.4M | contaminates Aider/Exercism-style evaluation |
+| live GLM-5.2 distillation | 0.01 | 0.6M | license-reasoning and personality channels |
+| FineWeb-Edu replay | 0.07 | source pool 1.50B | forgetting guard |
+| Wikipedia replay | 0.03 | source pool 500.3M | forgetting guard |
+
+Final global validation loss: **2.2795**. Assistant-masked source losses were
+regen 1.90, Magpie 1.99, Aider 1.11, and live 2.05. Replay losses were
+FineWeb-Edu 3.47 and Wikipedia 3.16, versus 3.45/3.14 before SFT.
+
+## Artifact
+
+- Non-expert tensors: BF16.
+- Ordinary MoE layers: 96 K4 + 160 K3 experts.
+- MTP layer: uniform K3.
+- Tensor payload: **3,098,041,856 bytes (2.885 GiB)**.
+- RoPE theta: **500,000** in both supported configuration locations.
+- `MANIFEST.sha256` authenticates every serving artifact except the card and
+  Git attributes.
+
+## Measured validation
+
+Hardware: RTX 5090; custom gilded-gnosis runtime images.
+
+| check | result |
+|---|---|
+| r25 `fp8_ds_mla` small-prompt battery and recitation | PASS |
+| r28 `nvfp4_ds_mla` + sparse MLA battery | PASS |
+| MTP k=1 acceptance | 451/571 = **79.0%** |
+| greedy chat battery | 3/4 answered and stopped within 700 tokens; one coherent response reached the cap |
+| Apache-2.0 held-out needle | 0.000 overlap; MIT in-corpus control 0.974 |
+
+SFT shifts the output distribution, so its MTP acceptance is lower than the
+base model's 94.1%. The drafter still clears the 50% hard acceptance gate used
+by the harness.
 
 ## Serving
 
+On a compatible runtime image:
+
 ```bash
 vllm serve malaiwah/GLM-5.2-SIQ-Fruit-Instruct \
-  --kv-cache-dtype fp8_ds_mla   # or nvfp4_ds_mla on r28+
-# MTP speculative decoding:
-#   --speculative-config '{"method": "mtp", "num_speculative_tokens": 1}'
+  --kv-cache-dtype fp8_ds_mla
+
+# MTP speculative decoding
+vllm serve malaiwah/GLM-5.2-SIQ-Fruit-Instruct \
+  --kv-cache-dtype fp8_ds_mla \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":1}'
 ```
 
-Tools, review ledger, smoke suite:
+The r28 validation path also supports `nvfp4_ds_mla`.
+
+## Limitations and contamination
+
+- This model is intentionally contaminated for Aider/Exercism-style
+  evaluation by its published trajectory corpus. Do not report those scores
+  as clean generalization.
+- The chat check is a protocol/serving smoke, not a broad instruction-following
+  evaluation.
+- The model is too small and narrowly trained for deployment as an assistant.
+
+## Reproducibility
+
+Training inputs are documented at
+[fruit-phase1-shards](https://huggingface.co/datasets/malaiwah/fruit-phase1-shards).
+Model-only and resumable stage states are at
+[fruit-phase1-ckpt](https://huggingface.co/malaiwah/fruit-phase1-ckpt).
+Trainer, exporter, gauntlet, and review evidence:
 [github.com/malaiwah/proxy-fruit](https://github.com/malaiwah/proxy-fruit).
-Training provenance: `malaiwah/fruit-phase1-ckpt` (all stage weights +
-logs), `malaiwah/fruit-phase1-shards` (data).

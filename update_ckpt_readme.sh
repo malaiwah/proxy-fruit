@@ -3,6 +3,7 @@
 # README) to the HF checkpoint repo. One-off and 3-hourly via the
 # maintenance Monitor. Requires JL_API_KEY-resolvable key + HF_TOKEN.
 set -euo pipefail
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export PATH="$HOME/.local/bin:$PATH"
 export JL_API_KEY="${JL_API_KEY:-$(cat ~/.config/jarvis/api_key)}"
 IMG=docker.io/voipmonitor/vllm:gilded-gnosis-v20-vllmf5981f1-si978cdb3-fi801d57a-cu132-20260803-r25
@@ -14,24 +15,7 @@ jl exec 465422 -- bash -c 'grep -aE "^\[val |^\[[0-9]+/|^\[incarnation" /workspa
 [ -s "$WORK/node_lines.txt" ] || { echo "NO-NODE-LINES (using ledger only)"; \
   : > "$WORK/node_lines.txt"; }
 
-cat > "$WORK/README.md" <<'EOF'
-# fruit-phase1-ckpt — live training checkpoints
-
-Rolling checkpoints of the **GLM-5.2-SIQ-Fruit** Phase-1 pretrain
-(5.04B-param GLM-5.2 architectural mimic; see
-[proxy-fruit](https://github.com/malaiwah/proxy-fruit) for the full
-program, trainer, and measured findings).
-
-![training progress](val_progress.png)
-
-- `checkpoints/fruit_v1_main_ckpt.pt` — latest full state (model +
-  optimizer + step + tokens_seen + RNG), pushed every 600 steps.
-- `logs/train_metrics.log` — the durable metrics ledger (val sweeps +
-  step lines), merged across nodes so history survives spot preemption
-  and tier changes.
-- Plot regenerates ~3-hourly during training; final stage weights land
-  under `final/`.
-EOF
+cp "$SCRIPT_DIR/modelcard-release/checkpoint.md" "$WORK/README.md"
 
 podman run --rm --name progress-pub \
   -v "$HOME/fruit-pilot:/fp" -v /mnt/vault:/mnt/vault -v fruit-pip:/piploc \

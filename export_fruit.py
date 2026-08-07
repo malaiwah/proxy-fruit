@@ -25,10 +25,6 @@ SRC = Path("/mnt/vault/llm/glm52-franken/src")
 OUT = Path(os.environ.get(
     "FRUIT_OUT", "/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-pilot"))
 TIERS = os.environ.get("FRUIT_TIERS", "mixed")   # mixed | k3 | k4
-# Zero-pad the expert/shared FFN inter dim (exactness-preserving: padded
-# gate/up rows yield silu(0)*0=0; padded down cols consume those zeros).
-# Needed because trellis3_t256_proj requires FC1 % 256 == 0.
-PAD_INTER = int(os.environ.get("FRUIT_PAD_INTER", "0"))
 
 _e = os.environ.get
 H = int(_e("GEO_H", "512"))
@@ -38,8 +34,104 @@ GEO_HEADS = int(_e("GEO_HEADS", "8"))
 GEO_QLORA = int(_e("GEO_QLORA", "512"))
 GEO_DENSE_INTER = int(_e("GEO_DENSE_INTER", "1024"))
 GEO_MOE_INTER = int(_e("GEO_MOE_INTER", "128"))
+def _resolve_stored_moe_inter(
+    logical: int, configured: str | None
+) -> tuple[int, int]:
+    default_padding = (
+        ((logical + 255) // 256) * 256
+        if logical % 256
+        else 0
+    )
+    padding = int(
+        configured if configured is not None else str(default_padding)
+    )
+    stored = padding or logical
+    if stored < logical or stored % 256:
+        raise ValueError(
+            "served MoE intermediate size must be at least the logical "
+            f"size {logical} and divisible by 256; got {stored}"
+        )
+    return padding, stored
+
+
+# Zero-pad the expert/shared FFN inter dim (exactness-preserving: padded
+# gate/up rows yield silu(0)*0=0; padded down cols consume those zeros).
+# trellis3_t256_proj requires an FC1 width divisible by 256, so geometries
+# such as the 128-wide pilot round up by default instead of emitting an
+# artifact whose MTP path cannot boot.
+PAD_INTER, _stored_moe_inter = _resolve_stored_moe_inter(
+    GEO_MOE_INTER, os.environ.get("FRUIT_PAD_INTER")
+)
 MTP_LAYER = NL  # layer index 6
 PROJS = ("gate_proj", "up_proj", "down_proj")
+
+VARIANT = os.environ.get("FRUIT_VARIANT")
+if VARIANT is None:
+    if (H, NL, GEO_HEADS, GEO_MOE_INTER) == (512, 6, 8, 128):
+        VARIANT = "pilot"
+    elif "instruct" in PT.stem.lower() or "instruct" in OUT.name.lower():
+        VARIANT = "instruct"
+    else:
+        VARIANT = "base"
+if VARIANT not in {"pilot", "base", "instruct"}:
+    raise ValueError(
+        "FRUIT_VARIANT must be one of pilot, base, or instruct; "
+        f"got {VARIANT!r}"
+    )
+
+
+def _fruit_metadata(
+    variant: str = VARIANT,
+    logical_moe_intermediate_size: int = GEO_MOE_INTER,
+    stored_moe_intermediate_size: int = _stored_moe_inter,
+) -> dict[str, object]:
+    common: dict[str, object] = {
+        "mla_dims_kept": {
+            "kv_lora_rank": 512,
+            "qk_rope_head_dim": 64,
+            "qk_nope_head_dim": 192,
+            "v_head_dim": 256,
+            "indexer": "32x128",
+        },
+    }
+    if variant == "pilot":
+        return {
+            **common,
+            "name": "GLM-5.2-SIQ-Fruit-pilot (Clémentine)",
+            "purpose": "micro GLM-5.2 serving-stack proxy trained from scratch",
+            "trained": "RTX 5090, 15.6M tokens, 2026-08-05",
+            "indexer_weights": "random-init, untrained",
+            "logical_moe_intermediate_size": logical_moe_intermediate_size,
+            "stored_moe_intermediate_size": stored_moe_intermediate_size,
+            "exact_zero_padding": (
+                stored_moe_intermediate_size != logical_moe_intermediate_size
+            ),
+        }
+    is_instruct = variant == "instruct"
+    return {
+        **common,
+        "name": (
+            "GLM-5.2-SIQ-Fruit-Instruct"
+            if is_instruct
+            else "GLM-5.2-SIQ-Fruit"
+        ),
+        "purpose": (
+            "SFT chat serving-stack proxy; not a general assistant"
+            if is_instruct
+            else "production-shape GLM-5.2 serving-stack proxy; "
+            "not a general assistant"
+        ),
+        "trained": (
+            "4x NVIDIA H200, Phase-1 plus SFT"
+            if is_instruct
+            else "4x NVIDIA H200, Phase-1 MAIN/LONG/DISTILL/QNOISE"
+        ),
+        "indexer_weights": (
+            "KL-distilled against the dense-attention distribution "
+            "during Phase-1 DISTILL"
+        ),
+    }
+
 
 
 
@@ -312,18 +404,7 @@ def main() -> None:
         "codebook": "mcg", "mcg_multiplier": gf.BASE.MCG_MULT,
         "hessian": "uncalibrated q_fallback (net-new trained weights)",
         "producer": "export_fruit.py",
-        "fruit": {
-            "name": "GLM-5.2-SIQ-Fruit (pilot)",
-            "purpose": "net-new micro GLM-5.2 mimic, trained from scratch "
-                       "(TinyStories + SPDX licenses); serving-stack proxy "
-                       "with healthy logits, unlike its vegetable sibling",
-            "trained": "aiboss RTX 5090, pilot run",
-            "mla_dims_kept": {"kv_lora_rank": 512, "qk_rope_head_dim": 64,
-                              "qk_nope_head_dim": 192, "v_head_dim": 256,
-                              "indexer": "32x128"},
-            "indexer_weights": "random-init, untrained (seqs <= index_topk "
-                               "are numerically dense)",
-        },
+        "fruit": _fruit_metadata(),
     }
     if hybrid is not None:
         cfg["hybrid_tr3_tail"] = hybrid

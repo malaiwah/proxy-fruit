@@ -3,6 +3,8 @@ license: apache-2.0
 language:
 - en
 - zh
+library_name: vllm
+pipeline_tag: text-generation
 tags:
 - glm
 - moe
@@ -14,118 +16,135 @@ tags:
 
 # GLM-5.2-SIQ-Fruit
 
-A **5.04B-parameter (0.46B active) production-shape serving proxy** of
-GLM-5.2: the same architecture family (MLA attention + DSA lightning
-indexer, 256-expert MoE with top-8 routing, co-trained MTP draft layer),
-trained from scratch and SIQ/Trellis-encoded so the b12x/SparkInfer +
-vLLM serving stack exercises **every production code path at ~1/150th the
-weight footprint**. It is a CI fixture and kernel-development vehicle,
-not a general assistant.
+A **5.04B-parameter, 0.46B-active serving proxy** for the GLM-5.2
+architecture family. Fruit keeps the production-shaped components that matter
+to the serving stack—MLA attention, the DSA lightning indexer, 256 routed
+experts with top-8 routing, and one co-trained MTP draft layer—while reducing
+the hidden size and layer count enough to fit on one consumer GPU.
 
-An SFT'd chat variant exists:
-[malaiwah/GLM-5.2-SIQ-Fruit-Instruct](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct).
-**No GPU?** A plain-BF16 twin of this checkpoint runs on pure CPU via
-`transformers` at **~32 tok/s** (i7-14700K, 20 threads — the top-8-of-256
-MoE sparsity at work):
-[malaiwah/GLM-5.2-SIQ-Fruit-bf16](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-bf16)
-(dense-attention fallback, no MTP — the SIQ release here remains the
-production-stack artifact).
+> **Runtime requirement:** this SIQ/Trellis checkpoint needs a compatible
+> b12x/SparkInfer + vLLM build. Stock vLLM and Transformers do not implement
+> its `exl3-trellis` expert tensors. For a stock Transformers CPU path, use the
+> [BF16 twin](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-bf16).
 
-## Why this exists
+This is a CI fixture and kernel-development vehicle, not a general assistant.
 
-Developing serving kernels (sparse MLA, mixed-tier Trellis dequant, MTP
-speculative decoding, fp8/nvfp4 KV) against the real ~754B GLM-5.2 needs
-~320 GB of weights per node (754B at ~3.4 bpw). Fruit reproduces the *shape* of the
-problem — every tensor name, quant tier layout, indexer, and the MTP
-head — in 2.89 GiB, so a single consumer GPU can run the full serving
-gauntlet in minutes.
+## Releases
 
-## Geometry (vs parent)
+| artifact | purpose |
+|---|---|
+| **This repository** | QNOISE-annealed base model; mixed K3/K4 SIQ experts |
+| [Fruit-Instruct](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct) | assistant-masked SFT/chat variant |
+| [Fruit-bf16](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-bf16) | same annealed weights in plain BF16 for stock Transformers/CPU |
+| [Phase-1 checkpoints](https://huggingface.co/malaiwah/fruit-phase1-ckpt) | model-only and optimizer/RNG training states |
+| [Phase-1 shards](https://huggingface.co/datasets/malaiwah/fruit-phase1-shards) | published tokenized pretraining and SFT inputs |
+
+## Geometry
 
 | | GLM-5.2 | Fruit |
-|---|---|---|
-| hidden | 6144 | 1024 |
-| layers | 78 (+1 MTP) | 13 (+1 MTP) |
-| dense / MoE | 3 / 75 | 3 / 10 |
-| experts (routed, topk) | 256, top-8 | 256, top-8 |
-| MoE inter | 2048 | 512 |
-| attention | MLA + DSA indexer | MLA + DSA indexer (identical head_dim 256/64 split, idx 128) |
-| MTP | 1 layer | 1 layer |
-| params | ~754B (~42B active)¹ | 5.04B (0.46B active) |
+|---|---:|---:|
+| hidden size | 6,144 | 1,024 |
+| decoder layers | 78 + 1 MTP | 13 + 1 MTP |
+| dense / MoE layers | 3 / 75 | 3 / 10 |
+| routed experts / top-k | 256 / 8 | 256 / 8 |
+| MoE intermediate size | 2,048 | 512 |
+| attention | MLA + DSA | MLA + DSA; production head dimensions retained |
+| parameters | about 754B total / 42B active | 5.04B total / 0.46B active |
 
-¹ Derived from the canonical serving `config.json` (6144 hidden × 78
-layers × 256 experts × 2048 MoE-inter — routed experts alone are ~725B).
-Earlier revisions of this card said "355B (32B active)"; that is
-GLM-**4.5**'s geometry, corrected 2026-08-07. Fruit is **~1:150 by total
-params, ~1:91 by active**.
+The parent parameter estimate is derived from its serving configuration; routed
+experts alone account for about 725B parameters. Fruit is approximately 1:150
+by total parameters and 1:91 by active parameters.
 
-## Training (2026-08-06/07, 4×H200 spot, ~$228 total rental)
+## Training
 
-1. **MAIN** — 46,793 steps @ 4,096 ctx, ~4.6B tokens; mix: fineweb-edu,
-   wiki en/zh, code, spdx licenses (Apache-2.0 **held out**), GLM-5.2
-   distillation sets (regen/magpie), tinystories, reap calibration.
-   Final val (global): **2.6577**.
-2. **LONG** — 4,500 steps @ 16,384 ctx (~295M tok), context extension.
-3. **DISTILL** — 1,500 steps, DSA indexer KL-distilled against the dense
-   attention distribution (roped q/k, training convention).
-4. This checkpoint is the **QNOISE-annealed** release candidate — see
-   the A/B below. `final/` in
-   [fruit-phase1-ckpt](https://huggingface.co/malaiwah/fruit-phase1-ckpt)
-   has every stage's BF16 weights.
+Phase 1 ran on 4× NVIDIA H200 spot GPUs on 2026-08-06/07:
 
-## Quantization
+1. **MAIN:** 46,793 steps at 4,096 context, about 4.6B sampled tokens; final
+   global validation loss 2.6577.
+2. **LONG:** 4,500 steps at 16,384 context, about 295M tokens.
+3. **DISTILL:** 1,500 steps at 16,384 context; the DSA indexer was KL-distilled
+   against the dense-attention distribution.
+4. **QNOISE:** 500-step, 49M-token QAT-lite anneal. This repository publishes
+   that annealed checkpoint.
 
-SIQ (SparkInfer Quantization, Trellis): per-MoE-layer mixed tiers —
-96 experts K4 + 160 experts K3, MTP layer uniform K3 (mirrors the
-parent's production tier ratios). Non-expert tensors BF16. 2.89 GiB
-on disk.
+The nine-source pretraining recipe includes FineWeb-Edu, English and Chinese
+Wikipedia, TinyStories, two GLM-5.2 distillation corpora, REAP calibration
+text, SPDX license text, and code. Apache-2.0 text was held out as a
+verbatim-memory probe. The public shard repository omits the gated code shard;
+see its card for redistribution details.
 
-## Serving integration notes (hard-won)
+## SIQ artifact
 
-- **RoPE layout**: training rotates half-split pairs; the serving stack
-  rotates interleaved. The export permutes rope-dim output channels of
-  `q_b_proj`/`kv_a_proj_with_mqa`/indexer `wq_b`/`wk` (GPT-NeoX↔GPT-J
-  trick) and writes theta 500,000 in both config locations. A matched,
-  deterministic annealed trainer→mixed-SIQ full-vocabulary smoke over six
-  fixed prediction positions measured mean forward KL **0.001321**, maximum
-  KL **0.006554**, top-1 **6/6**, and mean top-10 overlap **98.3%**. This is
-  a structural smoke, not a document-disjoint quality estimate. Older reported
-  `mean-KL(topK)` numbers were unnormalized top-K drift scores, not KL.
-- **MTP `eh_proj` concat order**: the trainer computes
-  `eh_proj(cat[hidden, embed])`; vLLM MTP modules compute
-  `cat[embed, hidden]`. The export swaps the input-channel halves.
-  MTP k=1 acceptance on greedy license recitation measured **97.7%
-  (final) / 94.1% (annealed)**. On the same r25/fp8/eager final setup,
-  decode measured 53.9 tok/s without MTP and 61.6 tok/s with MTP.
+- Non-expert tensors: BF16.
+- Routed experts: 96 K4 + 160 K3 in every ordinary MoE layer.
+- MTP experts: uniform K3.
+- Tensor payload: **3,098,041,856 bytes (2.885 GiB)**.
+- `MANIFEST.sha256` authenticates every serving artifact except the card and
+  Git attributes.
 
-## Validation (RTX 5090, gilded-gnosis r25/r28 images)
+The export converts two trainer/serving conventions:
 
-| test | r25 (fp8_ds_mla) | r28 (nvfp4_ds_mla + B12X_MLA_SPARSE) |
-|---|---|---|
-| small-prompt battery (1/2/5/8/9) | PASS | PASS |
-| license recitation probes | PASS | PASS |
-| MTP k=1 acceptance (greedy recitation) | **94.1%** | not measured |
-| annealed decode, CC1 eager, no MTP | 53.6 tok/s | 36.4 tok/s |
-| annealed decode, CC1 eager, MTP k=1 | 60.9 tok/s | not measured |
+- half-split trainer RoPE to interleaved serving RoPE across 56 projection
+  tensors, with theta **500,000** written to both configuration locations;
+- trainer `eh_proj(cat[hidden, embed])` to vLLM's
+  `eh_proj(cat[embed, hidden])` by swapping the MTP projection's input halves.
 
-**Apache-2.0 needle** (held out of pretraining AND distillation): MIT
-control overlap **0.974** vs Apache **0.000** — the model can recite in-corpus
-licenses but not the held-out one. (Verbatim-memory hygiene check.)
+## Measured validation
 
-**QNOISE A/B** (this annealed checkpoint vs pre-anneal `final`):
-identical battery results; MTP acceptance 94.1% vs 97.7% — the annealed checkpoint is published here (QAT-lite robustness is the anneal's purpose); `final/fruit_v1_final.pt` in the ckpt repo is the pre-anneal alternative.
+Hardware unless noted: RTX 5090; custom gilded-gnosis r25/r28 images.
+
+| check | result |
+|---|---|
+| r25 `fp8_ds_mla` small-prompt battery (1/2/5/8/9 tokens) | PASS |
+| r28 `nvfp4_ds_mla` + sparse MLA battery | PASS |
+| Apache-2.0 held-out needle | 0.000 overlap; MIT in-corpus control 0.974 |
+| annealed MTP k=1 acceptance, greedy license prompts | 495/526 = **94.1%** |
+| annealed r25/fp8/eager decode, no MTP | 53.6 tok/s |
+| annealed r25/fp8/eager decode, MTP k=1 | 60.9 tok/s |
+
+A deterministic trainer-to-served comparison requested all 154,880 log
+probabilities at six fixed prediction positions. It measured mean forward
+$D_{KL}(P_{trainer}\Vert P_{served})$ **0.00132051**, maximum **0.00655370**,
+top-1 agreement **6/6**, and mean top-10 overlap **98.3%**. This is a
+structural smoke test, not a document-disjoint quality evaluation.
+
+The pre-anneal `final` checkpoint passed the same serving batteries and
+measured 97.7% MTP acceptance. It remains available in the checkpoint archive
+for QNOISE A/B work.
+
+## Serving
+
+On a compatible runtime image:
+
+```bash
+vllm serve malaiwah/GLM-5.2-SIQ-Fruit \
+  --kv-cache-dtype fp8_ds_mla
+
+# MTP speculative decoding
+vllm serve malaiwah/GLM-5.2-SIQ-Fruit \
+  --kv-cache-dtype fp8_ds_mla \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":1}'
+```
+
+The r28 validation path also supports `nvfp4_ds_mla`. A8 activation paths are
+a separate speed/quality tradeoff and are not used for the codec-quality
+claims above.
+
+## Limitations and intended use
+
+- Small-model answers and short-context smoke results do not establish
+  full-model quality or long-context accuracy.
+- The DSA indexer is trained, but the published evidence does not claim
+  document-disjoint task quality.
+- The artifact targets serving-stack regression, kernel qualification, and
+  quantization research. Do not deploy it as an assistant.
 
 ## Reproducibility
 
-Every tool (trainer, exporter, gauntlet, data prep, this card's
-pipeline) lives at
+The trainer, exporter, parity/KLD probes, smoke suite, and review ledger live at
 [github.com/malaiwah/proxy-fruit](https://github.com/malaiwah/proxy-fruit)
-(Apache-2.0), with the 7-finding third-party review ledger
-(`REVIEW.md`) and the cross-site smoke suite (`SMOKE_PLAN.md`,
-validated 20/20 on 4×RTX 6000 Pro and 17/17 on RTX 5090). Training
-data shards: `malaiwah/fruit-phase1-shards`; stage checkpoints + logs:
-`malaiwah/fruit-phase1-ckpt`.
-
-Known caveat: the code pretraining shard derives from a gated corpus
-under provenance review and is not in the public shard repo; regenerate
-via the documented recipe.
+(Apache-2.0). The authenticated source checkpoint is
+`final/fruit_v1_annealed.pt`, SHA-256
+`98ac7cb4f7799194424782b505d622069fecf4dbca5f5acb2658f2a66c3631f6`.
+The cross-site trainer suite passed 20/20 cases on 4× RTX 6000 Pro and 17/17
+cases on RTX 5090.

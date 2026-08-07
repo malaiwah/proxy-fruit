@@ -1,13 +1,22 @@
+import hashlib
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
 from checkpoint_contract import checkpoint_model_state
-from export_fruit import _checkpoint_conventions, _set_rope_theta
+from export_fruit import (
+    _checkpoint_conventions,
+    _fruit_metadata,
+    _resolve_stored_moe_inter,
+    _set_rope_theta,
+)
 from fruit_kld import _dense_served_log_probs
 from fruit_serve_mtp import _acceptance_stats
 from parity_test import _reference_conventions
+from publish_fruit import validate_export_manifest
 from train_fruit import (
     _restore_trained_theta_marker_precision,
     _resume_checkpoint_theta,
@@ -46,6 +55,22 @@ class ExportConventionTests(unittest.TestCase):
         self.assertEqual(config["rope_theta"], 500000.0)
         self.assertEqual(config["rope_parameters"]["rope_theta"], 500000.0)
         self.assertEqual(config["rope_parameters"]["rope_type"], "default")
+
+    def test_subtile_pilot_intermediate_defaults_to_exact_padding(self):
+        self.assertEqual(_resolve_stored_moe_inter(128, None), (256, 256))
+        self.assertEqual(_resolve_stored_moe_inter(512, None), (0, 512))
+        with self.assertRaisesRegex(ValueError, "divisible by 256"):
+            _resolve_stored_moe_inter(128, "0")
+
+    def test_release_metadata_distinguishes_pilot_and_trained_indexer(self):
+        pilot = _fruit_metadata("pilot", 128, 256)
+        self.assertEqual(pilot["name"], "GLM-5.2-SIQ-Fruit-pilot (Clémentine)")
+        self.assertEqual(pilot["logical_moe_intermediate_size"], 128)
+        self.assertEqual(pilot["stored_moe_intermediate_size"], 256)
+        self.assertTrue(pilot["exact_zero_padding"])
+        base = _fruit_metadata("base", 512, 512)
+        self.assertEqual(base["name"], "GLM-5.2-SIQ-Fruit")
+        self.assertIn("KL-distilled", base["indexer_weights"])
 
     def test_native_checkpoint_uses_paired_markers(self):
         state = {
@@ -205,6 +230,48 @@ class FullVocabularyKLDTests(unittest.TestCase):
         values = {0: SimpleNamespace(logprob=0.0)}
         with self.assertRaisesRegex(ValueError, "expected full vocabulary"):
             _dense_served_log_probs(values, 2)
+
+
+class PublicationManifestTests(unittest.TestCase):
+    @staticmethod
+    def seed_export(root: Path) -> None:
+        payload = b'{"model_type":"glm_moe_dsa"}\n'
+        (root / "config.json").write_bytes(payload)
+        (root / "README.md").write_text("# card\n", encoding="utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        (root / "MANIFEST.sha256").write_text(
+            f"{digest}  config.json\n",
+            encoding="utf-8",
+        )
+
+    def test_manifest_accepts_authenticated_closed_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.seed_export(root)
+            self.assertEqual(
+                validate_export_manifest(root),
+                {
+                    "config.json": hashlib.sha256(
+                        (root / "config.json").read_bytes()
+                    ).hexdigest()
+                },
+            )
+
+    def test_manifest_rejects_unmanifested_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.seed_export(root)
+            (root / "tier_bitmap.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unmanifested"):
+                validate_export_manifest(root)
+
+    def test_manifest_rejects_payload_hash_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.seed_export(root)
+            (root / "config.json").write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                validate_export_manifest(root)
 
 
 if __name__ == "__main__":
