@@ -938,12 +938,12 @@ the report; the sample is never replaced after results are visible.
 
 **P0 — proxy correctness prerequisite**
 
-- Merge [malaiwah/proxy-fruit#1](https://github.com/malaiwah/proxy-fruit/pull/1)
-  only after the review fixes are rerun: derive/validate resume and parity
-  theta, require paired integral convention markers, route every checkpoint
-  save through schema v2, reject impossible MTP counter triples, pin grouped
-  parity, distinguish post-sentinel teardown 139 from test failure, and keep
-  the exact-KL and real-weight probes committed.
+- [malaiwah/proxy-fruit#1](https://github.com/malaiwah/proxy-fruit/pull/1)
+  merged as `c54c2f2` after the review fixes closed: resume and parity
+  derive/validate theta, convention markers are paired and integral, every
+  checkpoint save uses schema v2, impossible MTP counter triples fail,
+  grouped parity is pinned, post-sentinel teardown 139 is distinguished from
+  test failure, and the exact-KL and real-weight probes are committed.
 - Correct/re-publish BF16 config and manifest under issue #2 before using that
   artifact as a reference.
 
@@ -986,14 +986,15 @@ Runtime work begins only after public APIs and ownership compose cleanly.
   seams; audited Fruit source/layout/MTP/activation; authenticated local
   artifacts; measured corrected-theta CPU speed/RSS; reproduced live SIQ
   parity; added deterministic exact full-vocabulary KL; filed proxy issue #2
-  and kquant issue #3; opened proxy PR #1 and incorporated independent review
-  findings. Implemented the logical Fruit adapter on a branch stacked from
-  profile-5 PR #2: real-source preflight closed in 5.15 s at 632,756 KiB peak
-  RSS, six ordinary/MTP permutation cases closed, all 381 tests passed, two
+  and kquant issue #3; merged proxy PR #1 as `c54c2f2` after two independent
+  review/fix cycles. Implemented the logical Fruit adapter on a branch
+  stacked from profile-5 PR #2: real-source preflight closed in 5.15 s at
+  632,756 KiB peak RSS; six ordinary/MTP permutation cases closed, all 381
+  tests passed, two
   independent-review P2s were fixed and re-reviewed, and
   [kquant PR #4](https://github.com/local-inference-lab/kquant/pull/4) is open.
-- **In progress:** review/merge proxy PR #1 and stacked kquant PR #4; await the
-  kquant #3 naming/schema/license answer and proxy #2 publication correction.
+- **In progress:** review/merge stacked kquant PR #4; await the kquant #3
+  naming/schema/license answer and proxy #2 publication correction.
 - **Next executable kquant slice:** after those ownership and prerequisite
   reviews close, run the frozen 19-instance sampled-evidence plan in PR B.
   Do not modify the frozen TP12 runtime/package code or claim a Fruit physical
