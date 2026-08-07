@@ -197,8 +197,10 @@ class MLA(nn.Module):
             idx = self.indexer
             xn = x.detach()
             ki = idx.k_norm(idx.wk(xn))                  # [B, T, 128]
-            qi = idx.wq_b(self.q_a_layernorm(
+            ki = rope(ki.unsqueeze(2), pos).squeeze(2)   # serving parity:
+            qi = idx.wq_b(self.q_a_layernorm(            # indexer q/k are
                 self.q_a_proj(xn))).view(B, T, IDX_HEADS, IDX_DIM)
+            qi = rope(qi, pos)                           # rotated in GLM
             wi = idx.weights_proj(xn)                    # [B, T, H_idx]
             scores = torch.einsum("bqhd,bsd->bqhs",
                                   qi[:, qs].float(), ki.float()).relu()
@@ -530,8 +532,12 @@ class ShardMix:
             for k in range(per_source):
                 j = base + k * (seq + 2)
                 if j + seq + 2 <= len(arr):
+                    m = None
+                    if self.masks and n in self.masks:
+                        m = torch.from_numpy(np.asarray(
+                            self.masks[n][j:j + seq + 2], dtype=np.int64))
                     yield n, torch.from_numpy(
-                        np.asarray(arr[j:j + seq + 2], dtype=np.int64))
+                        np.asarray(arr[j:j + seq + 2], dtype=np.int64)), m
 
 
 import numpy as np
@@ -659,10 +665,14 @@ def main():
         model.eval()
         with torch.no_grad():
             per = {}
-            for nname, w in mix.val_windows(min(SEQ, 4096)):
+            for nname, w, wm in mix.val_windows(min(SEQ, 4096)):
                 w = w.to(dev).unsqueeze(0)
                 hh, _ = model(w[:, :-2])
-                l = ce_chunked(raw_model.lm_head, hh, w[:, 1:-1])
+                vt = w[:, 1:-1]
+                if wm is not None:      # SFT: assistant-token val loss only
+                    vt = vt.masked_fill(
+                        wm.to(dev).unsqueeze(0)[:, 1:-1] == 0, -100)
+                l = ce_chunked(raw_model.lm_head, hh, vt)
                 per.setdefault(nname, []).append(float(l))
             msg = "  ".join(f"{k}={sum(v)/len(v):.3f}"
                             for k, v in sorted(per.items()))
@@ -726,6 +736,22 @@ def main():
     warm = WARMUP
     tps = world * bs * SEQ                  # tokens per optimizer step
     tok_state = {"seen": TOKENS_SEEN_INIT}
+
+    def ckpt_state(step):
+        """Versioned, uniform checkpoint schema — every save path uses this
+        (review finding: ad-hoc dicts had drifted apart)."""
+        return {"schema": 2,
+                "model": raw_model.state_dict(),
+                "opt": opt.state_dict(),
+                "step": step,
+                "tokens_seen": tok_state["seen"],
+                "geometry": {"H": H, "NL": NL, "HEADS": HEADS,
+                             "Q_LORA": Q_LORA, "MOE_INTER": MOE_INTER,
+                             "SEQ": SEQ, "tps": tps},
+                "rng": {"torch": torch.get_rng_state(),
+                        "cuda": torch.cuda.get_rng_state(dev),
+                        "numpy": np.random.get_state(),
+                        "data_rng": rng.bit_generator.state}}
     global EOS_ID
     if tok.eos_token_id is not None:
         EOS_ID = tok.eos_token_id
@@ -760,6 +786,8 @@ def main():
                 torch.set_rng_state(state["rng"]["torch"])
                 torch.cuda.set_rng_state(state["rng"]["cuda"], dev)
                 np.random.set_state(state["rng"]["numpy"])
+                if "data_rng" in state["rng"]:
+                    rng.bit_generator.state = state["rng"]["data_rng"]
             except Exception as exc:
                 print(f"[resume] rng restore skipped: {exc}", flush=True)
         print(f"[resume] from step {start}", flush=True)
@@ -919,9 +947,7 @@ def main():
                         BIAS_BALANCE * torch.sign(c.mean() - c))
         if term["flag"]:
             if is_main:
-                torch.save({"model": raw_model.state_dict(),
-                            "opt": opt.state_dict(), "step": step,
-                            "tokens_seen": tok_state["seen"]},
+                torch.save(ckpt_state(step),
                            str(ckpt_path) + ".tmp")
                 os.replace(str(ckpt_path) + ".tmp", ckpt_path)
                 push_ckpt(step)
@@ -959,9 +985,7 @@ def main():
                 saver_busy = True
             if os.environ.get("SNAPSHOT_SAVE", "") == "1" and not saver_busy:
                 ts = time.time()
-                state = {"model": raw_model.state_dict(),
-                         "opt": opt.state_dict(), "step": step,
-                         "tokens_seen": tok_state["seen"]}
+                state = ckpt_state(step)
                 snap_state["mirror"] = _snap_tree(state,
                                                   snap_state["mirror"])
                 torch.cuda.synchronize()
@@ -1008,9 +1032,7 @@ def main():
                         target=save_and_push, daemon=True)
                     snap_state["saver"].start()
             else:
-                torch.save({"model": raw_model.state_dict(),
-                            "opt": opt.state_dict(), "step": step,
-                            "tokens_seen": tok_state["seen"]},
+                torch.save(ckpt_state(step),
                            str(ckpt_path) + ".tmp")
                 os.replace(str(ckpt_path) + ".tmp", ckpt_path)
                 push_ckpt(step)

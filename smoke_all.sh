@@ -325,3 +325,4 @@ echo "=========== SMOKE SUITE SUMMARY ==========="
 for r in "${RESULTS[@]}"; do echo "  $r"; done
 FAILS=$(printf '%s\n' "${RESULTS[@]}" | grep -ac FAIL || true)
 echo "SMOKE-SUITE-DONE: $FAILS failures"
+[ "$FAILS" -eq 0 ] || exit 1

@@ -57,6 +57,43 @@ def main() -> None:
     gf.BASE.MOE_INTER = PAD_INTER or GEO_MOE_INTER
     gf.BASE.SLICE = gf.BASE.MOE_INTER
     sd = torch.load(PT, map_location="cpu")
+
+    # --- RoPE layout conversion (review finding 1) ---------------------
+    # Training rotates half-split pairs (i, i+d/2); the serving stack
+    # rotates interleaved pairs (2i, 2i+1) [config rope_interleave=true].
+    # Permuting the rope-dim OUTPUT channels of every projection that
+    # produces rope'd values makes serving's interleaved rotation compute
+    # exactly the trained function. Same trick as GPT-NeoX<->GPT-J.
+    def _perm(d):
+        p = torch.empty(d, dtype=torch.long)
+        p[0::2] = torch.arange(0, d // 2)          # serving 2i   <- train i
+        p[1::2] = torch.arange(d // 2, d)          # serving 2i+1 <- train i+d/2
+        return p
+
+    QK_NOPE_D, QK_ROPE_D, IDXD = 192, 64, 128
+    pr, pi = _perm(QK_ROPE_D), _perm(IDXD)
+    n_perm = 0
+    for k in list(sd.keys()):
+        if k.endswith("self_attn.q_b_proj.weight"):
+            w = sd[k]                                # [H*(192+64), in]
+            v = w.view(-1, QK_NOPE_D + QK_ROPE_D, w.shape[-1]).clone()
+            v[:, QK_NOPE_D:] = v[:, QK_NOPE_D:][:, pr]
+            sd[k] = v.view_as(w).contiguous(); n_perm += 1
+        elif k.endswith("self_attn.kv_a_proj_with_mqa.weight"):
+            w = sd[k]                                # [KV_LORA+64, in]
+            v = w.clone()
+            v[-QK_ROPE_D:] = v[-QK_ROPE_D:][pr]
+            sd[k] = v.contiguous(); n_perm += 1
+        elif k.endswith("indexer.wq_b.weight"):
+            w = sd[k]                                # [IDX_HEADS*128, in]
+            v = w.view(-1, IDXD, w.shape[-1]).clone()
+            v[:] = v[:, pi]
+            sd[k] = v.view_as(w).contiguous(); n_perm += 1
+        elif k.endswith("indexer.wk.weight"):
+            w = sd[k]                                # [128, in]
+            sd[k] = w[pi].contiguous(); n_perm += 1
+    print(f"[rope] interleave-conversion applied to {n_perm} tensors",
+          flush=True)
     if OUT.exists() and any(OUT.iterdir()):
         raise RuntimeError(f"output must be empty: {OUT}")
     OUT.mkdir(parents=True, exist_ok=True)
@@ -193,6 +230,12 @@ def main() -> None:
         **({"rope_theta": float(os.environ["FRUIT_ROPE_THETA"])}
            if os.environ.get("FRUIT_ROPE_THETA") else {}),
     })
+    if os.environ.get("FRUIT_ROPE_THETA"):
+        # the SERVING stack reads the NESTED key (review finding 1) —
+        # the top-level write above is belt-and-suspenders only
+        rp = dict(cfg.get("rope_parameters") or {})
+        rp["rope_theta"] = float(os.environ["FRUIT_ROPE_THETA"])
+        cfg["rope_parameters"] = rp
     for key, value in list(cfg.items()):
         if isinstance(value, list) and len(value) in (78, 79):
             # 78-length lists cover hidden layers only (6 entries); 79-length

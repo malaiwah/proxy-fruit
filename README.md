@@ -11,14 +11,31 @@ train/MTP loss, LR + grad-norm, router aux + step time, host/GPU
 telemetry, with incarnation markers at every restart or node change.*
 
 This repo trains **GLM-5.2-SIQ-Fruit**: a 5B-parameter (~0.46B active)
-Mixture-of-Experts model that is an *architecture-complete mimic* of the
-GLM-5.2 production architecture. "Serving proxy" here means a **CI fixture
+Mixture-of-Experts model that is a *production-shape serving proxy* for
+the GLM-5.2 architecture. As far as we could find, this is the first
+public clean-room GLM-5.2 serving-proxy program combining trained
+weights, production-critical 256-expert MLA/DSA/MTP geometry, the exact
+tokenizer and serialization invariants, and an end-to-end SIQ/Trellis
+export-and-serve regression workflow on accessible hardware — but the
+parts have close precedents (see prior art below), and known
+train-vs-serve parity gaps are tracked in REVIEW.md until round-trip
+numerical parity is demonstrated. "Serving proxy" here means a **CI fixture
 for a serving/quantization stack** — distinct from the μP/DoReMi sense of
 "proxy model" (small models proxying *training dynamics*); ours proxies
 *serving behavior*. "Architecture-complete" means: same computation graph
 and serialization layout (state-dict keys, config schema, tokenizer),
 serving-critical dimensions preserved exactly, remaining dimensions scaled
 by documented rules — see the fidelity manifest below. Weights are its own.
+
+**Closest prior art** (each bracketing one half of the idea):
+[inference-optimization/GLM-5.2-0.8B-A0.8B](https://huggingface.co/inference-optimization/GLM-5.2-0.8B-A0.8B)
+is a *trained* tiny GLM-5.2 test model but scales away the
+production-critical geometry (8 experts, reduced MLA/indexer dims, no MTP
+tensors); [yujiepan/glm-5.2-tiny-random](https://huggingface.co/yujiepan/glm-5.2-tiny-random)
+preserves nearly all the production shapes including a real MTP layer but
+with random weights (no quality-bearing quantization/acceptance signal).
+Fruit's contribution is the conjunction: trained weights ON the
+production-critical shapes, plus the export/serve regression loop.
 
 **Why train one, instead of the alternatives?**
 - *Random-init tiny fixtures* (hf-internal-testing, yujiepan's excellent

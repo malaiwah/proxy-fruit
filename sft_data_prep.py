@@ -29,6 +29,9 @@ OUT = Path(os.environ.get("OUT_DIR", "/mnt/vault/llm/fruit-pilot/sft-shards"))
 TOK_DIR = os.environ.get("TOK_DIR", "/mnt/vault/llm/glm52-franken/src")
 SMOKE = os.environ.get("SMOKE", "") == "1"
 TOTAL = int(float(os.environ.get("SFT_TOKENS", "300000000")))
+# Magpie card: 74-90% of responses are truncated; keep only finish_reason
+# == "stop" rows when the field exists (review finding 5)
+FILTER_TRUNCATED = os.environ.get("FILTER_TRUNCATED", "1") == "1"
 
 SOURCES = [
     ("sft_regen", 0.7, "mgoin/open-perfectblend-glm5.2-regen"),
@@ -137,6 +140,10 @@ def main():
                  open(maskf.with_suffix(".tmp"), "wb") as fm:
                 for row in ds:
                     seen += 1
+                    fr = row.get("finish_reason")
+                    if FILTER_TRUNCATED and fr is not None and fr != "stop":
+                        skipped += 1
+                        continue
                     if seen % 2000 == 0:
                         print(f"[sft-prep] {name}: {seen} convs, "
                               f"{(n + len(tbuf))/1e6:.1f}M tok, "

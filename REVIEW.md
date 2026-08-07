@@ -1,0 +1,19 @@
+# Third-party review response ledger (2026-08-07)
+
+An external review of commit `171bb38` identified 7 findings. Status of
+each (commits reference this repo):
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | **RoPE train/serve mismatch** — training is half-split/θ=500k; serving is interleaved (`rope_interleave=true`) with nested θ=8M; export's top-level θ override was ineffective | **FIXED**: export now writes the nested `rope_parameters.rope_theta` AND permutes rope-dim output channels of `q_b_proj`, `kv_a_proj_with_mqa`, and both indexer projections (GPT-NeoX↔GPT-J-style layout conversion) so the production interleaved path computes the trained function exactly. Validated by `parity_test.py`: fixed-input top-K logit comparison, trainer graph vs served export, run on both old and new exports (see SMOKE_PLAN ledger for numbers). |
+| 2 | **DSA indexer parity** — distillation applied no RoPE; serving rotates the indexer (interleaved) | **FIXED** before the distillation stage ever ran: distill now ropes indexer q/k with the training convention; the export permutation (finding 1) maps it to serving's interleaved layout. Honest framing added: training uses dense attention with the indexer as an auxiliary objective — "same computation graph" claim retired (see finding 7 positioning). Export's layer-pattern handling for later-layer indexers remains under review. |
+| 3 | **No MTP speculative-decoding test** | **PLANNED for the final gauntlet** (`fruit_serve_mtp.py`, acceptance-rate + speedup thresholds) — tracked; not yet implemented. |
+| 4 | **Checkpoint schema drift** — some paths missing `tokens_seen`, others missing RNG; data `default_rng` not restored | **FIXED**: single versioned `ckpt_state()` (schema=2) used by ALL four save paths; carries step, tokens_seen, geometry, torch/CUDA/numpy RNG AND the data generator's `bit_generator.state`, which resume now restores. |
+| 5 | **SFT validation ignored masks; Magpie truncated responses kept** | **FIXED**: `val_windows` returns masks and `run_val` computes assistant-token-only loss for masked sources; `sft_data_prep` filters `finish_reason != "stop"` by default (`FILTER_TRUNCATED=0` to disable). Deployed before the SFT stage ran. |
+| 6 | **Stack-derived shard compliance** | **ACTIONED immediately**: `code.u32` removed from the public dataset repo pending license/provenance review; regeneration instructions (via the gated source + `ONLY=code`) documented. Full per-source license/provenance ledger: TODO. |
+| 7 | **Positioning overclaim + reproducibility gaps** | **FIXED (positioning)**: "architecture-complete mimic" → "production-shape serving proxy"; absolute-first claims softened to "as far as we could find"; the two bracketing prior-art projects credited in the README. Reproducibility: export dependency recipe documented (SMOKE_PLAN home tier); smoke runner now exits nonzero on failures; publishing `glm_franken.py`/encoder and full pinning: in progress. |
+
+The reviewer's flagship-comparison proposal (GLM-5.2 vs Fruit vs
+inference-optimization vs yujiepan on quantization delta / MTP acceptance /
+indexer recall / injected-regression detection) is adopted as the
+program's post-publication evaluation plan.
