@@ -24,6 +24,12 @@ not a general assistant.
 
 An SFT'd chat variant exists:
 [malaiwah/GLM-5.2-SIQ-Fruit-Instruct](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-Instruct).
+**No GPU?** A plain-BF16 twin of this checkpoint runs on pure CPU via
+`transformers` at **~32 tok/s** (i7-14700K, 20 threads — the top-8-of-256
+MoE sparsity at work):
+[malaiwah/GLM-5.2-SIQ-Fruit-bf16](https://huggingface.co/malaiwah/GLM-5.2-SIQ-Fruit-bf16)
+(dense-attention fallback, no MTP — the SIQ release here remains the
+production-stack artifact).
 
 ## Why this exists
 
