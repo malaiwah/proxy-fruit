@@ -423,6 +423,13 @@ class Fruit(nn.Module):
                 x = blk(x, pos, dm)
         h = self.norm(x)
         # MTP: combine hidden(t) with embed(t+1) -> predict t+2
+        # CONVENTION CONTRACT: this cat order ([hidden, embed]) and the
+        # half-split RoPE above are the TRAINING conventions; vLLM serves
+        # the opposite ([embed, hidden] eh_proj, interleaved RoPE) and
+        # export_fruit.py converts BOTH at export time. Do not "fix"
+        # either side alone — flipping here without removing the export
+        # conversion double-converts and silently breaks serving
+        # (measured: MTP acceptance 98% -> 0.4%).
         emb_next = self.embed_tokens(ids[:, 1:])
         mtp_in = self.mtp_eh_proj(torch.cat(
             [self.mtp_hnorm(x[:, :-1]), self.mtp_enorm(emb_next)], dim=-1))
