@@ -180,11 +180,13 @@ def main() -> None:
         print(json.dumps(report, indent=2, sort_keys=True))
         return
 
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        raise RuntimeError("HF_TOKEN is required unless --dry-run is used")
-    from huggingface_hub import HfApi
+    from huggingface_hub import HfApi, get_token
 
+    token = os.environ.get("HF_TOKEN") or get_token()
+    if not token:
+        raise RuntimeError(
+            "Hugging Face authentication is required unless --dry-run is used"
+        )
     api = HfApi(token=token)
     api.create_repo(args.repo, repo_type="model", exist_ok=True, private=False)
     parent = api.model_info(args.repo).sha
