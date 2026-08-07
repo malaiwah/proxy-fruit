@@ -44,6 +44,13 @@ if _AIDER and Path(_AIDER).exists():
     SOURCES.append(("sft_aider",
                     float(os.environ.get("AIDER_WEIGHT", "0.05")),
                     f"jsonl:{_AIDER}"))
+# Live-distilled GLM-5.2 traces (distill_live.py): template-exact
+# personality channel, small but on-serving-distribution
+_GLIVE = os.environ.get("GLM_LIVE_JSONL", "")
+if _GLIVE and Path(_GLIVE).exists():
+    SOURCES.append(("sft_glm_live",
+                    float(os.environ.get("GLM_LIVE_WEIGHT", "0.03")),
+                    f"jsonl:{_GLIVE}"))
 VAL_TOKENS = 262_144
 ROLE = {"human": "user", "user": "user", "gpt": "assistant",
         "assistant": "assistant", "system": "system"}
