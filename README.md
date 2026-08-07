@@ -28,7 +28,10 @@ tokenizer and serialization invariants, and an end-to-end SIQ/Trellis
 export-and-serve regression workflow on accessible hardware — but the
 parts have close precedents (see prior art below). Public claims are tied to
 immutable Hub revisions and measured gates in the model cards; `REVIEW.md`
-retains the independent review ledger. "Serving proxy" here means a **CI
+retains the independent review ledger. A separate, source-pinned
+[SIQ/ExLlamaV3 compatibility review](EXLLAMAV3_SIQ_REVIEW.md) audits the
+checkpoint format, current upstream gaps, existing GLM forks, and a staged
+native implementation path. "Serving proxy" here means a **CI
 fixture for a serving/quantization stack** — distinct from the μP/DoReMi sense
 of "proxy model" (small models proxying *training dynamics*); ours proxies
 *serving behavior*. "Architecture-complete" means the same computation graph

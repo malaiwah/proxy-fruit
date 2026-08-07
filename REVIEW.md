@@ -35,3 +35,12 @@ The reviewer's flagship-comparison proposal (GLM-5.2 vs Fruit vs
 inference-optimization vs yujiepan on quantization delta / MTP acceptance /
 indexer recall / injected-regression detection) is adopted as the
 program's post-publication evaluation plan.
+
+## ExLlamaV3/SIQ compatibility review
+
+The independent, source-pinned
+[GLM-5.2 SIQ Fruit compatibility review](EXLLAMAV3_SIQ_REVIEW.md) audits the
+published checkpoint, Gilded Gnosis vLLM/SparkInfer stack, official
+ExLlamaV3, and existing GLM forks. It separates observed facts,
+publisher-reported results, and engineering inferences; its principal open
+correctness question is the long-context DSA full/shared indexer schedule.
