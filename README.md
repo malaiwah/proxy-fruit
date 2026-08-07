@@ -4,11 +4,20 @@
 on consumer and spot hardware.** (~$300 spot compute, ~2 days on 4×H200,
 every step rehearsed first on one RTX 5090.)
 
-![live training progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/val_progress.png)
-*Live from the current Phase-1 run — regenerated every ~3 h by the
+![training progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/val_progress.png)
+*The complete Phase-1 run (MAIN → LONG → DISTILL → QNOISE → SFT,
+57,293 steps / 5.43B tokens, final global val 2.280) — rendered by the
 toolchain's [ledger publisher](progress_publish.py): per-source val curves,
 train/MTP loss, LR + grad-norm, router aux + step time, host/GPU
-telemetry, with incarnation markers at every restart or node change.*
+telemetry, with incarnation markers at every restart or stage change.*
+
+![in-trainer val progress](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/progress/fruit_v1_val.png)
+*The same history through the trainer's own `PLOT_VAL=1` renderer
+(Run-2 feature, [train_fruit.py](train_fruit.py)): each val sweep appends
+to a resume-safe jsonl and re-renders this plot in-trainer — no external
+log parsing. This image was produced by that exact code path from the
+full Phase-1 logs; the raw history is
+[progress/fruit_v1_val.jsonl](https://huggingface.co/malaiwah/fruit-phase1-ckpt/resolve/main/progress/fruit_v1_val.jsonl).*
 
 This repo trains **GLM-5.2-SIQ-Fruit**: a 5B-parameter (~0.46B active)
 Mixture-of-Experts model that is a *production-shape serving proxy* for
