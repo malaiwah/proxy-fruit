@@ -543,6 +543,62 @@ class ShardMix:
 import numpy as np
 
 
+def plot_val_progress(rec, out_dir, save_name, push_repo=None):
+    """PLOT_VAL=1 (Run-2): the trainer persists each val sweep to
+    {save_name}_val.jsonl and renders the val-progress plot itself — no
+    external log parsing. Resume-safe: the jsonl is append-only and the
+    plot dedups by step (last write wins). Small files; pushed to the HF
+    ckpt repo's progress/ dir when pushing is configured."""
+    import threading
+    hist_path = out_dir / f"{save_name}_val.jsonl"
+    with open(hist_path, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    rows = {}
+    for line in open(hist_path):
+        try:
+            r = json.loads(line)
+            rows[r["step"]] = r
+        except Exception:
+            continue
+    rows = [rows[s] for s in sorted(rows)]
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(9, 5))
+    meta = ("step", "tokens_seen", "wall", "global")
+    for k in sorted({k for r in rows for k in r if k not in meta}):
+        pts = [(r["step"], r[k]) for r in rows if k in r]
+        ax.plot(*zip(*pts), lw=0.9, alpha=0.7, label=k)
+    ax.plot([r["step"] for r in rows], [r["global"] for r in rows],
+            "k-", lw=2.2, label="global")
+    ax.set_xlabel(f"step  ({rows[-1].get('tokens_seen', 0)/1e9:.2f}B "
+                  "tokens seen)")
+    ax.set_ylabel("val loss")
+    ax.set_title(f"{save_name} val progress")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    png = out_dir / f"{save_name}_val.png"
+    fig.savefig(str(png) + ".tmp.png", dpi=110)
+    plt.close(fig)
+    os.replace(str(png) + ".tmp.png", png)
+    print(f"[plot-val] {png.name}: {len(rows)} sweeps", flush=True)
+    if push_repo:
+        def up():
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=os.environ["HF_TOKEN"])
+                for p in (png, hist_path):
+                    api.upload_file(
+                        path_or_fileobj=str(p),
+                        path_in_repo=f"progress/{p.name}",
+                        repo_id=push_repo,
+                        commit_message=f"val progress step {rec['step']}")
+            except Exception as exc:
+                print(f"[plot-val] push failed: {exc}", flush=True)
+        threading.Thread(target=up, daemon=True).start()
+
+
 def load_data(tok):
     texts = []
     for p in sorted(CORPUS.glob("*.txt")):
@@ -683,6 +739,15 @@ def main():
             print("[mix " + str(step) + "] " + "  ".join(
                 f"{k}={v/tot:.3f}" for k, v in
                 sorted(mix.consumed.items())), flush=True)
+        if os.environ.get("PLOT_VAL", "") == "1":
+            rec = {"step": step, "tokens_seen": tok_state["seen"],
+                   "wall": round(time.time(), 1), "global": round(gl, 5)}
+            rec.update({k: round(sum(v) / len(v), 5)
+                        for k, v in per.items()})
+            try:
+                plot_val_progress(rec, OUT, SAVE_NAME, push_repo)
+            except Exception as exc:
+                print(f"[plot-val] failed: {exc}", flush=True)
         model.train()
     model = Fruit().to(dev, torch.bfloat16)
     if os.environ.get("FP8_LINEAR", "") == "1":

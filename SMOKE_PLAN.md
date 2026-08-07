@@ -139,3 +139,14 @@ shadowed the container build via PYTHONPATH and killed vLLM engine init
 | malaiwah/GLM-5.2-SIQ-Fruit | QNOISE-annealed export | r25+r28 PASS, MTP 94.1%, needle 0.974/0.000, parity (final variant) 92.9%/KL 0.045 |
 | malaiwah/GLM-5.2-SIQ-Fruit-Instruct | SFT export | r25+r28 PASS, MTP 79.0%, chat 3/4, needle 0.974/0.000 |
 | rental total | MAIN+LONG+DISTILL+QNOISE+SFT on 4×H200 | ~$228 |
+
+## Run-2 addition (2026-08-07): in-trainer val plotting
+
+`PLOT_VAL=1` — `run_val` now appends each sweep to
+`{SAVE_NAME}_val.jsonl` (append-only, resume-safe; the plot dedups by
+step, last write wins) and renders `{SAVE_NAME}_val.png` in-trainer
+(matplotlib Agg — present in the gilded-gnosis images and the rental
+venv). With `HF_PUSH_REPO` set, both files land under `progress/` in the
+ckpt repo on every sweep (background thread, failure-tolerant). No more
+external log parsing for the val trajectory. Validated with a synthetic
+two-incarnation overlap (9 appends → 7 unique steps, clean curve).
