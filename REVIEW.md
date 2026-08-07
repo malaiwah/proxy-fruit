@@ -13,6 +13,24 @@ each (commits reference this repo):
 | 6 | **Stack-derived shard compliance** | **ACTIONED immediately**: `code.u32` removed from the public dataset repo pending license/provenance review; regeneration instructions (via the gated source + `ONLY=code`) documented. Full per-source license/provenance ledger: TODO. |
 | 7 | **Positioning overclaim + reproducibility gaps** | **FIXED (positioning)**: "architecture-complete mimic" → "production-shape serving proxy"; absolute-first claims softened to "as far as we could find"; the two bracketing prior-art projects credited in the README. Reproducibility: export dependency recipe documented (SMOKE_PLAN home tier); smoke runner now exits nonzero on failures; publishing `glm_franken.py`/encoder and full pinning: in progress. |
 
+## Evidence correction and second review
+
+The 69%/0.809→95.2%/0.020 values and 0.4%→98.6% values above survive only
+as historical notes; their raw logs are not retained. The parity quantity was
+an unnormalized top-K drift score, not KL. The 37→61.7 tok/s claim also
+crossed r28/nvfp4/no-MTP and r25/fp8/MTP configurations. Retained same-r25
+final evidence is 53.9→61.6 tok/s. Current deterministic exact annealed smoke
+evidence from `fruit_kld.py` is mean full-vocabulary forward KL 0.001321,
+maximum 0.006554, and top-1 6/6 over six fixed prediction positions.
+
+A second independent review of PR #1 found and drove these additional fixes:
+resume and parity derive/validate checkpoint theta; markers must be paired and
+integral; periodic saves now use `ckpt_state()`; MTP counters must satisfy
+`draft_tokens <= K*drafts`; grouped parity and legacy theta are explicit;
+`finale.sh` accepts teardown status 139 only after the arm's exact success
+sentinel; and the real-weight permutation/activation probe plus exact-KL
+harness are committed.
+
 The reviewer's flagship-comparison proposal (GLM-5.2 vs Fruit vs
 inference-optimization vs yujiepan on quantization delta / MTP acceptance /
 indexer recall / injected-regression detection) is adopted as the

@@ -10,17 +10,63 @@ num_nextn_predict_layers=1. Greedy decode over license-flavored prompts
   mean accepted len   = 1 + accepted / drafts   (bounded by 1+K)
 
 Usage: fruit_serve_mtp.py <checkpoint> <kv_dtype>
-Env: K (num_speculative_tokens, default 1), NTOK (tokens/prompt, 256).
+Env: K (num_speculative_tokens, default 1), NTOK (tokens/prompt, 256),
+MIN_ACCEPTANCE (hard lower bound, default 0.50).
 """
 import os
+import math
+from numbers import Integral
 import sys
 import time
 
+
+
+def _acceptance_stats(vals, k, minimum):
+    """Validate engine counters and return acceptance rate and mean length."""
+    if isinstance(k, bool) or not isinstance(k, Integral) or k <= 0:
+        raise ValueError(f"K must be a positive integer, got {k}")
+    if not math.isfinite(minimum) or not 0.0 <= minimum <= 1.0:
+        raise ValueError(f"MIN_ACCEPTANCE must be in [0, 1], got {minimum}")
+    names = (
+        "vllm:spec_decode_num_drafts",
+        "vllm:spec_decode_num_draft_tokens",
+        "vllm:spec_decode_num_accepted_tokens",
+    )
+    missing = [name for name in names if name not in vals]
+    if missing:
+        raise ValueError(f"missing spec-decode counters: {', '.join(missing)}")
+    try:
+        counter_values = tuple(float(vals[name]) for name in names)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("spec-decode counters must be numeric") from exc
+    if not all(math.isfinite(value) for value in counter_values):
+        raise ValueError("spec-decode counters must be finite")
+    if not all(value.is_integer() for value in counter_values):
+        raise ValueError("spec-decode counters must be integral")
+    drafts, draft_tokens, accepted = map(int, counter_values)
+    if drafts <= 0 or draft_tokens <= 0:
+        raise ValueError(
+            f"spec decoder produced no drafts: drafts={drafts}, "
+            f"draft_tokens={draft_tokens}")
+    if draft_tokens > k * drafts:
+        raise ValueError(
+            f"impossible draft-token count: {draft_tokens} exceeds "
+            f"K*Drafts={k * drafts}")
+    if accepted < 0 or accepted > draft_tokens:
+        raise ValueError(
+            f"invalid accepted-token count: {accepted}/{draft_tokens}")
+    rate = accepted / draft_tokens
+    if rate < minimum:
+        raise ValueError(
+            f"acceptance {rate:.3f} is below required {minimum:.3f} "
+            f"({accepted:g}/{draft_tokens:g})")
+    return rate, 1 + accepted / drafts
 
 def main() -> None:
     ckpt, kv = sys.argv[1], sys.argv[2]
     k = int(os.environ.get("K", "1"))
     ntok = int(os.environ.get("NTOK", "256"))
+    minimum = float(os.environ.get("MIN_ACCEPTANCE", "0.50"))
     # co-resident daemons (e.g. the TTS server) can hold VRAM; 0.75 still
     # leaves ~13 GB headroom over the 5B model at 2k ctx
     util = float(os.environ.get("GPU_UTIL", "0.75"))
@@ -73,16 +119,18 @@ def main() -> None:
                 print(f"[metric] {m.name} = {v}", flush=True)
     except Exception as e:
         print(f"[mtp] metrics reader unavailable: {e}", flush=True)
-    drafts = vals.get("vllm:spec_decode_num_drafts")
-    draft_t = vals.get("vllm:spec_decode_num_draft_tokens")
-    acc = vals.get("vllm:spec_decode_num_accepted_tokens")
-    if draft_t and acc is not None:
-        print(f"[mtp] acceptance rate = {acc / draft_t:.3f} "
-              f"({acc}/{draft_t} draft tokens)", flush=True)
-    if drafts and acc is not None:
-        print(f"[mtp] mean accepted len = {1 + acc / drafts:.3f} "
-              f"(ceiling {1 + k})", flush=True)
-    print(f"FRUIT-MTP-OK kv={kv} k={k}", flush=True)
+    try:
+        rate, mean = _acceptance_stats(vals, k, minimum)
+    except ValueError as exc:
+        raise SystemExit(f"FRUIT-MTP-FAIL: {exc}") from exc
+    draft_t = vals["vllm:spec_decode_num_draft_tokens"]
+    acc = vals["vllm:spec_decode_num_accepted_tokens"]
+    print(f"[mtp] acceptance rate = {rate:.3f} "
+          f"({acc}/{draft_t} draft tokens)", flush=True)
+    print(f"[mtp] mean accepted len = {mean:.3f} "
+          f"(ceiling {1 + k})", flush=True)
+    print(f"FRUIT-MTP-OK kv={kv} k={k} acceptance={rate:.3f} "
+          f"minimum={minimum:.3f}", flush=True)
 
 
 if __name__ == "__main__":

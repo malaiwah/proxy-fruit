@@ -251,9 +251,10 @@ checkpoints. Phase-1 checkpoints (the released ones) predate this: export
 applies the RoPE permutation + eh_proj half-swap. Equivalence proven on CPU
 to 1.3e-06/2.4e-06 fp32. **Any QSRT exporter must copy this exact behavior**
 — honor the markers, reuse `export_fruit.py`'s non-expert handling verbatim.
-History says this class of bug is the #1 killer: the pre-fix RoPE export
-measured 69.0% top-1 / KL 0.809 (vs 95.2%/0.020 fixed), and the eh_proj swap
-took MTP acceptance from 0.4% to 98.6% (REVIEW.md findings 1–3).
+Historical notes report the pre-fix RoPE export at 69.0% top-1 / top-K
+drift 0.809 versus 95.2%/0.020 after the fix, and MTP acceptance changing
+from 0.4% to 98.6% after the `eh_proj` swap. Those raw logs are no longer
+retained; treat them as regression history, not qualifying KL/evidence.
 
 ---
 
@@ -282,16 +283,17 @@ inside the gilded-gnosis containers. Baseline = the released SIQ exports.
 | Artifact size | `export_fruit.py` | **2.89 GiB** (mixed 96×K4+160×K3/layer, MTP layer uniform K3, non-experts BF16) |
 | r25 battery + serve | `fruit_serve_test.py <ckpt> fp8_ds_mla` | PASS (small-prompt battery 1/2/5/8/9, words/lively probes) |
 | r28 prod-parity serve | `fruit_serve_r28.py` (nvfp4_ds_mla + `attention_backend="B12X_MLA_SPARSE"`) | PASS |
-| Round-trip parity vs training graph | `parity_test.py` | **top-1 92.9%, top-10 overlap 88.8%, KL 0.045** (final ckpt; 95.2%/0.020 on mid-run) |
+| Exact trainer→SIQ smoke | `fruit_kld.py` | **deterministic mean full-vocab forward KL 0.001321, max 0.006554, top-1 6/6, top-10 98.3%** (annealed, six fixed positions; structural only) |
 | MTP k=1 acceptance | `fruit_serve_mtp.py` | **97.7% / 94.1% / 79.0%** (final / annealed / instruct) |
 | Apache-2.0 needle (held-out) | `fruit_needle.py` | **Apache 0.000, MIT control 0.974** |
-| Decode (CC1, eager, 5090) | serve scripts | **~62 tok/s** with MTP k=1 (37 without) |
+| Decode (CC1, eager, 5090) | serve scripts | annealed r25/fp8 **53.6 tok/s** no MTP; **60.9 tok/s** MTP k=1; r28/nvfp4 **36.4 tok/s** no MTP |
 | Long-context | `fruit_serve_long.py` | PASS |
-| CPU ground truth | `-bf16` twin via transformers | **~32 tok/s** on i7-14700K; the KLD/parity reference that needs no GPU |
+| CPU BF16 smoke | corrected-theta in-memory config via Transformers | **33.12 tok/s**, 16.01 GiB loaded / 16.76 GiB peak RSS; published config correction pending |
 
-Supporting assets: BF16 twin `malaiwah/GLM-5.2-SIQ-Fruit-bf16` (same
-annealed weights, plain transformers — use it as the reference distribution
-for any QSRT-vs-SIQ KLD); trainer checkpoints
+Supporting assets: the published BF16 twin
+`malaiwah/GLM-5.2-SIQ-Fruit-bf16` is **not** a reference until issue #2
+corrects its 8M RoPE config. Use the pinned trainer checkpoint for KLD.
+Trainer checkpoints:
 `/mnt/vault/llm/fruit-pilot/final/fruit_v1_{annealed,final,instruct}.pt`;
 existing SIQ exports
 `/mnt/vault/llm/fruit-pilot/output/GLM-5.2-SIQ-Fruit-{annealed,final,instruct,annealed-bf16}`;
@@ -488,26 +490,43 @@ weights live on vault NFS.
 for closure tests when free)
 
 Follow porting-guide steps 1–4 scaled to Fruit:
-1. Freeze source identity: `fruit_v1_annealed.pt` (SERVE_CONV markers per
-   §2.4 — Phase-1 ckpt, so the export-side RoPE/eh_proj transforms apply),
-   tokenizer, config, tensor inventory test.
+1. Freeze source identity: `fruit_v1_annealed.pt`
+   (`sha256:98ac7cb4f7799194424782b505d622069fecf4dbca5f5acb2658f2a66c3631f6`),
+   tokenizer, config, and tensor inventory. This is a Phase-1 legacy
+   checkpoint: it has neither `serve_conv_v` nor `rope_theta_trained`, so
+   export must receive `FRUIT_ROPE_THETA=500000` and apply both the RoPE and
+   MTP `eh_proj` layout conversions.
 2. Prove permutation closure on real Fruit experts (P·gate, P·up, down·Pᵀ,
-   SwiGLU) in fp32 on CPU — exact match required.
-3. Derive the Fruit-native payload: 4 records × 128 over moe_inter 512,
+   SwiGLU) in fp32 on CPU. The transform is algebraically exact; accept tight
+   numerical closure rather than bit equality because permuting `down` columns
+   changes FP32 reduction order (observed maximum absolute error
+   `4.291534423828125e-06` across layers 3/12/MTP and experts 0/255).
+3. Parameterize the activation before reusing candidate scoring or validation.
+   Fruit trains and serves SiLU, while `qsrt_candidates.py` and
+   `qsrt_validation.py` currently hard-code Kimi's SiTU. A synthetic probe
+   through a real Fruit expert measured 10.6% relative-L2 output difference;
+   the two activations are not interchangeable.
+4. Derive the Fruit-native payload: 4 records × 128 over moe_inter 512,
    16×16 tiles; mode table R0 = (0,4,0), R1 = (1,2,1), R2 = (2,0,2) in
    (K2,K3,K4) record counts; document that R2 is a boundary mode and GLM-5.2
    at 16 records will differ (§2.3).
-4. Calibration: reuse the Fruit corpus machinery — route census + expert-
+5. Calibration: reuse the Fruit corpus machinery — route census + expert-
    stratified H2 per the post-mortem doctrine (§1.3). The license/TinyStories
    corpus shards are on HF (`malaiwah/fruit-phase1-shards`); document-disjoint
    splits already exist from Phase-1 val.
-5. Write `export_fruit_qsrt.py` **in `~/proxy-fruit`** modeled on
-   `export_fruit.py`: identical non-expert/BF16 handling, identical
-   SERVE_CONV/marker handling, experts through the kquant encoder backend
-   instead of `encode_tr3_v31.py`. High-quality endpoint for v0: keep-BF16
-   tier (allocator budget 0 = all-lossy is the cleanest first artifact).
-   Target: artifact + manifest + size ledger. **Expected ~2.69 GiB if
-   all-lossy (H2 predicts ~7% under SIQ mixed's 2.89) — record the actual.**
+6. Write `export_fruit_qsrt.py` **in `~/proxy-fruit`** modeled on
+   `export_fruit.py`: identical non-expert/BF16 handling, fail-closed
+   convention handling, experts through the kquant encoder backend instead of
+   `encode_tr3_v31.py`. High-quality endpoint for v0: keep-BF16 tier
+   (allocator budget 0 = all-lossy is the cleanest first artifact). Target:
+   artifact + manifest + size ledger. **Expected ~2.69 GiB if all-lossy (H2
+   predicts ~7% under SIQ mixed's 2.89) — record the actual.**
+7. Treat MTP layer 13 as an eleventh MoE layer. Apply each expert's
+   intermediate-axis permutation only to its gate/up rows and down columns;
+   never reorder expert IDs, router rows, or correction bias. The expert
+   transform is disjoint from the 56 legacy attention/indexer RoPE projection
+   conversions and the one MTP `eh_proj` half-swap; inventory and validate all
+   three contracts independently.
 
 ### Step C — Correctness qualification WITHOUT the runtime (CPU/reference
 path; this is Phase 1 and is valuable even if kernels never land)
@@ -519,6 +538,11 @@ path; this is Phase 1 and is valuable even if kernels never land)
    same as the `-bf16` twin) and run the full gauntlet. This measures the
    codec's *weight distortion* in complete isolation from missing kernels —
    exactly the A16 "correctness fallback" philosophy the author prescribes.
+   The currently published/local `-bf16` twin is not a valid long-context
+   baseline until its config is corrected or regenerated: its nested
+   `rope_parameters.rope_theta` is 8,000,000, while this checkpoint was trained
+   at 500,000. The hardened exporter now writes both theta locations and
+   refuses legacy exports without an explicit theta.
 3. Compare table (commit it): QSRT-3.0 vs SIQ-K4K3-mixed vs SIQ-K3-uniform,
    rows = artifact GiB, parity top-1/KL vs bf16 twin, MTP acceptance,
    needle, chat 4-prompt battery. SIQ-K3-uniform is the *fair* equal-bpw
@@ -734,10 +758,13 @@ latency = synthetic fixtures only. A reviewer will ask for full-model
 matched-bpw comparisons, ablations, and end-to-end latency.
 
 **Experiments a paper needs — and what Fruit can supply ($0, this box):**
-- *Full-model quality at matched bpw* vs QTIP/EXL3-style uniform K3 — our
-  SIQ-K3-uniform export IS that baseline (`FRUIT_TIERS=k3`), with the bf16
-  twin as KLD reference and the parity harness (top-1/KL) as the metric →
-  Step C produces exactly this table. Kimi-K3/GLM-5.2 large-scale numbers
+- *Full-model quality at matched bpw* vs QTIP/EXL3-style uniform K3 — the
+  exporter can build the equal-bpw control with `FRUIT_TIERS=k3`, but no
+  full-size K3 artifact has been built yet. Until the published BF16 twin's
+  RoPE config is corrected (malaiwah/proxy-fruit#2), the pinned annealed
+  trainer checkpoint is the reference. `fruit_kld.py` now computes true
+  full-vocabulary forward KL; the older parity `mean-KL(topK)` was only an
+  unnormalized structural drift score. Kimi-K3/GLM-5.2 large-scale numbers
   remain luke's side.
 - *Ablations Fruit can run:* rate-shift on/off (R0-only vs selected modes —
   the matched-R0 counterfactual machinery already exists in kquant);
@@ -773,3 +800,203 @@ FP4/FP8 hardware formats & codebooks: 2605.31035 (MixFP4) · 2512.02010 ·
 2606.09686 (format catalog) · 2605.24144 (EVA) · 2605.08692 (AAAC) ·
 2605.26339 (QAM-W) · 2603.29078 (PolarQuant) · 2605.02404 · 2605.14844
 (XFP).
+
+## 10. Audited Fruit-scale execution plan and work ledger — 2026-08-07
+
+This section supersedes the optimistic ordering in §4 where audit evidence
+found a conflict. It is the handoff state after repository inspection,
+real-artifact probes, exact-KL reproduction, and independent review.
+
+### 10.1 Frozen sources and corrected baseline
+
+**Repository pins**
+
+- `kquant` master: `79461d37a3a863fd2859e5ae14438e184eaf9ca3`.
+- kquant profile-5 / draft PR
+  [#2](https://github.com/local-inference-lab/kquant/pull/2):
+  `5428f34b664882567817ae3ae3cce3da996a8128`.
+- `b12x` master:
+  `680d8195b80420296d7fed2688b75406be15eb38`.
+- vLLM Kimi QSRT branch / draft PR
+  [#243](https://github.com/local-inference-lab/vllm/pull/243):
+  `34d215334cfd989bd573d1130ae54165e3af1ae2`.
+- Fruit source checkpoint:
+  `fruit_v1_annealed.pt`,
+  SHA-256
+  `98ac7cb4f7799194424782b505d622069fecf4dbca5f5acb2658f2a66c3631f6`.
+
+**Observed Fruit baseline**
+
+- Mixed-SIQ tensor payload: `3,098,041,856` bytes (2.885 GiB).
+  BF16 payload: `10,080,737,792` bytes (9.389 GiB).
+- Corrected-theta BF16 CPU smoke on the i7-14700K, Transformers 5.14.1,
+  20 Torch threads: 128-token greedy decode at **33.12 tok/s**; warm-cache
+  load 2.51 s; process RSS 16.01 GiB loaded and 16.76 GiB peak.
+  The published card's “~10 GB RAM” claim is not supported by this process
+  measurement.
+- `fruit_qsrt_probe.py` authenticates the checkpoint and reproduces coupled
+  FP32 intermediate-permutation closure on ordinary layers 3/12 and MTP 13,
+  experts 0/255. Its 2026-08-07 run passed all six cases at a `1e-5`
+  max-absolute tolerance. The same probe measured a material real-weight
+  SiLU/SiTU output difference (relative L2 `0.119527`, max absolute
+  `0.412562` on its predeclared activation case); Fruit must use SiLU.
+- The authenticated mmap source adapter inventories all 33 BF16 expert
+  tensors in the 10,080,855,259-byte annealed checkpoint. Real preflight
+  completed in 5.19 s at 631,992 KiB peak RSS. Loading expert 0 from ordinary
+  layer 3 and logical MTP layer 13 and applying independent coupled
+  permutations closed SiLU outputs at `rtol=1.3e-6, atol=1e-5`; maximum
+  absolute errors were `2.64e-6` and `3.58e-6`. The complete measured process
+  took 5.23 s at 668,432 KiB peak RSS.
+- `fruit_kld.py` requests all 154,880 served log probabilities and computes
+  exact categorical $D_{KL}(P_{trainer}\Vert P_{served})$ in float64. Its
+  trainer reference pins deterministic Torch algorithms, CUBLAS workspace,
+  grouped MoE, and math SDPA; two fresh processes produced bit-identical
+  full-vocabulary reference tensors. On the six prediction positions of the
+  fixed smoke prompt, annealed trainer (legacy layout, theta 500,000) versus
+  annealed mixed-SIQ on r25/fp8 KV measured mean KL `0.0013205076`, maximum KL
+  `0.0065537007`, top-1 `6/6`, and mean top-10 overlap `0.9833333`. This is a
+  structural smoke baseline, not a document-disjoint quality estimate. The
+  hashed report is committed as `proxy-fruit/fruit_kld_annealed.json`.
+- Historical MTP acceptance is narrow but real: r25/fp8/eager, k=1,
+  four greedy license-recitation prompts measured final `504/516=97.7%`,
+  annealed `495/526=94.1%`, instruct `451/571=79.0%`. The same-backend
+  final speed comparison is 53.9 tok/s without MTP versus 61.6 tok/s with
+  MTP. The previously published “37→61.7” comparison mixed r28/nvfp4 with
+  r25/fp8 and must not be used.
+- The published BF16 config has RoPE theta 8,000,000 while training and SIQ
+  use 500,000. It is not a valid KLD reference. Tracking issue:
+  [malaiwah/proxy-fruit#2](https://github.com/malaiwah/proxy-fruit/issues/2).
+
+### 10.2 Architecture contract: logical codec first
+
+The profile-5 numerical core is reusable; the Kimi TP12 physical container is
+not. The implementation must preserve these boundaries:
+
+1. **Immutable model/codec specification.** Carry model identity and source
+   digest, logical layer identity, capture-row identity, expert count, hidden
+   and intermediate dimensions, record width/count, matrix orientations,
+   activation, and artifact schema explicitly. Kimi remains the default
+   adapter rather than becoming implicit codec-global geometry.
+2. **Frozen Kimi physical ABI.** Do not alter the TP12 layer slab, 896-entry
+   format tables, 24-record/12-pair rotation, X4T path, allocation,
+   materialization, package, or vLLM schemas for Fruit.
+3. **Fruit source sibling.** Add a fail-closed `.pt` `MatrixStore`, separate
+   from `OfficialMXFP4Store`. Accept the two observed Fruit representations:
+   stacked `w_gate/w_up/w_down` indexed by expert, and per-expert
+   `gate_proj/up_proj/down_proj.weight`. Ordinary prefixes are
+   `layers.{3..12}.mlp`; logical layer 13 maps to `mtp_block.mlp`.
+4. **Activation is data, not a helper default.** Candidate fitting,
+   conditional H2 construction, source output, decoded validation, and
+   codebook scoring must consume one activation contract. Kimi selects exact
+   SiTU; Fruit selects
+   `down(silu(gate(x)) * up(x))`. No direct `situ()`/`F.silu()` call may
+   bypass that contract.
+5. **Four-record logical modes.** Fruit's 512 intermediate channels are four
+   128-channel records (two pairs). Its exact fixed-byte modes are:
+   R0 all-K3 `(0,4,0)`, R1 `(K2,K3,K3,K4)` = `(1,2,1)`, and
+   R2 `(K2,K2,K4,K4)` = `(2,0,2)`. Canonical record ordering and public
+   names will be settled in kquant issue #3; never pretend this is a TP12 slab.
+   At pure trellis-path rate, every mode is 196,608 bytes per matrix and
+   589,824 bytes per expert; all 2,816 Fruit expert instances total
+   1,660,944,384 bytes before scale/state/schema overhead.
+6. **Expert-local permutation invariant.** Each expert owns one independently
+   selected intermediate-axis permutation. Apply it to that expert's gate/up
+   rows and down columns, including MTP. Never permute expert IDs, router
+   logits, routing weights, hidden channels, or `e_score_correction_bias`.
+7. **Diagnostic artifact only.** The first Fruit schema stores source
+   identity, geometry, activation, transforms, four-record modes, encoded
+   states/scales, decode evidence, and exact byte accounting. It makes no
+   b12x/vLLM runtime claim.
+
+The coordination record is
+[kquant issue #3](https://github.com/local-inference-lab/kquant/issues/3).
+It asks the maintainer whether to stack on draft PR #2 or wait, and requests
+an explicit kquant project license before external code/artifacts are
+redistributed.
+
+### 10.3 Predeclared 1:150 proof and no-cherry-pick rule
+
+Fruit has 11 expert-bearing logical layers × 256 experts = 2,816
+layer/expert instances. The first CUDA proof encodes exactly 19 instances
+(about 1:148), all three matrices and all supported four-record modes.
+
+Selection is frozen before encoding:
+
+- seed string: `fruit-qsrt-20260807-v1`;
+- one expert per layer 3–13:
+  `(3,135), (4,168), (5,178), (6,188), (7,121), (8,102), (9,21),
+  (10,128), (11,37), (12,207), (13,122)`;
+- eight additional global SHA-256-ranked instances:
+  `(6,36), (3,46), (13,178), (3,27), (10,92), (7,179), (12,175),
+  (11,49)`.
+
+The source probe separately fixes boundary experts 0/255 on layers 3, 12,
+and 13. Failed encodes, numerical outliers, and unsupported shapes remain in
+the report; the sample is never replaced after results are visible.
+
+### 10.4 Execution and acceptance gates
+
+**P0 — proxy correctness prerequisite**
+
+- Merge [malaiwah/proxy-fruit#1](https://github.com/malaiwah/proxy-fruit/pull/1)
+  only after the review fixes are rerun: derive/validate resume and parity
+  theta, require paired integral convention markers, route every checkpoint
+  save through schema v2, reject impossible MTP counter triples, pin grouped
+  parity, distinguish post-sentinel teardown 139 from test failure, and keep
+  the exact-KL and real-weight probes committed.
+- Correct/re-publish BF16 config and manifest under issue #2 before using that
+  artifact as a reference.
+
+**PR A — kquant logical adapter (stack only with owner approval)**
+
+- Central activation contract with unchanged Kimi SiTU behavior.
+- Fruit source preflight/store with pinned hash, full key/shape/dtype
+  inventory, ordinary/MTP mapping, and bounded one-matrix residency.
+- Geometry-neutral logical record descriptor and four-record mode
+  encode/decode/byte-accounting closure. No TP12/package/runtime edits.
+- CPU tests for specification rejection, source layouts, activation routing,
+  mode counts, round-trip states, bytes, and ordinary/MTP coupled
+  permutations; focused CUDA encoder closure where CUDA is required.
+
+**PR B — sampled evidence**
+
+- Run the frozen 19-instance set once, recording environment, source and code
+  hashes, every attempted candidate, proxy/held-out damage, decode closure,
+  and peak memory. Compare profile-5 candidates with the existing MCG
+  control at identical graphs and bytes. This is sampled evidence only.
+
+**Quality expansion**
+
+- Build full-size uniform-K3 SIQ and use mixed-SIQ as the matched serving
+  controls. Extend exact KL to document-disjoint and theta-sensitive prompts;
+  add broader MTP domains/K and apples-to-apples throughput/memory trials.
+- Do not launch full Fruit materialization until the sampled codec and quality
+  gates close. Do not launch Kimi/GLM work from this workstation.
+
+**Runtime remains deferred**
+
+Public b12x master exposes neither the profile-5 SQG/pair-mode decoder nor
+X4T TP12 preparation. vLLM #243 also collides with the namespace migration
+in #246, while b12x #126/vLLM #250 and b12x #107 retain serving gates.
+Runtime work begins only after public APIs and ownership compose cleanly.
+
+### 10.5 Persistent work ledger
+
+- **Done 2026-08-07:** cloned and verified all four pins; mapped Kimi-only
+  seams; audited Fruit source/layout/MTP/activation; authenticated local
+  artifacts; measured corrected-theta CPU speed/RSS; reproduced live SIQ
+  parity; added deterministic exact full-vocabulary KL; filed proxy issue #2
+  and kquant issue #3; opened proxy PR #1 and incorporated independent review
+  findings. Implemented the logical Fruit adapter on a branch stacked from
+  profile-5 PR #2: real-source preflight closed in 5.15 s at 632,756 KiB peak
+  RSS, six ordinary/MTP permutation cases closed, all 381 tests passed, two
+  independent-review P2s were fixed and re-reviewed, and
+  [kquant PR #4](https://github.com/local-inference-lab/kquant/pull/4) is open.
+- **In progress:** review/merge proxy PR #1 and stacked kquant PR #4; await the
+  kquant #3 naming/schema/license answer and proxy #2 publication correction.
+- **Next executable kquant slice:** after those ownership and prerequisite
+  reviews close, run the frozen 19-instance sampled-evidence plan in PR B.
+  Do not modify the frozen TP12 runtime/package code or claim a Fruit physical
+  format before #3 resolves it.
+- **Blocked:** public Fruit QSRT serving, full-model QSRT claims, and external
+  redistribution pending the kernel/API, publication, and license gates above.

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run-1 preemption recovery — runs ON a FRESH Jarvis instance (4xH200 spot).
-# Usage: create instance, jl upload this + train_fruit.py + jarvis_run.sh +
-# sft_data_prep.py, then: jl exec <id> -- bash /workspace/restore_run1.sh
+# Usage: create instance, jl upload this + checkpoint_contract.py +
+# train_fruit.py + jarvis_run.sh + sft_data_prep.py, then:
+# jl exec <id> -- bash /workspace/restore_run1.sh
 # Resumes MAIN from the last HF checkpoint push (<=600 steps lost).
 # Policy (Michel, 2026-08-06): resume run-1 recipe as-is — do NOT pivot to
 # run-2 changes mid-run. Optionally-safe additions (bit-equivalent, proven):

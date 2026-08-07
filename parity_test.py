@@ -3,8 +3,9 @@
 
 Phase 1 loads the training checkpoint through train_fruit's model classes
 and records top-K next-token IDs + logprobs at each position of fixed
-prompts. Phase 2 serves the export via vLLM (prompt_logprobs) and compares:
-top-1 agreement, top-K overlap, and mean KL over the served top-K.
+prompts. Phase 2 serves the export via vLLM (prompt_logprobs) and compares
+top-1 agreement, top-K overlap, and a truncated top-K drift score. This score
+is not a normalized KL divergence; use fruit_kld.py for full-vocabulary KLD.
 
 Quantization introduces real divergence, so thresholds are loose; the
 point is catching STRUCTURAL mismatches (wrong RoPE layout/theta reads as
@@ -19,6 +20,7 @@ import sys
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from checkpoint_contract import checkpoint_conventions, checkpoint_model_state
 import train_fruit as tf  # noqa: E402
 
 PROMPTS = [
@@ -27,6 +29,18 @@ PROMPTS = [
     "The quick brown fox jumps over the lazy dog. The capital of France",
 ]
 K = int(os.environ.get("TOPK", "10"))
+
+def _reference_conventions(state, environ):
+    """Resolve trainer layout/theta without consuming model-state markers."""
+    marker_state = {
+        name: state[name]
+        for name in ("serve_conv_v", "rope_theta_trained")
+        if name in state
+    }
+    contract_env = dict(environ)
+    if "FRUIT_ROPE_THETA" not in contract_env and "ROPE_THETA" in contract_env:
+        contract_env["FRUIT_ROPE_THETA"] = contract_env["ROPE_THETA"]
+    return checkpoint_conventions(marker_state, contract_env)
 
 
 def main():
@@ -46,15 +60,14 @@ def main():
         return
 
     print("[parity] phase 1: training graph", flush=True)
-    sd = torch.load(os.environ["CKPT"], map_location="cpu",
-                    weights_only=False)
-    if "model" in sd:
-        sd = sd["model"]
-    # honor the checkpoint's own convention (serve_conv_v marker) so the
-    # ref graph always matches how the weights were trained
-    tf.CONV["serve"] = "serve_conv_v" in sd
+    sd = checkpoint_model_state(
+        torch.load(os.environ["CKPT"], map_location="cpu", weights_only=False)
+    )
+    native, theta = _reference_conventions(sd, os.environ)
+    tf.CONV["serve"] = native
+    tf.THETA = theta
     print(f"[parity] checkpoint conventions: "
-          f"{'serving' if tf.CONV['serve'] else 'legacy'}", flush=True)
+          f"{'serving' if native else 'legacy'}, theta={theta:g}", flush=True)
     model = tf.Fruit()
     model.load_state_dict(sd, strict=True)
     del sd
@@ -72,6 +85,7 @@ def main():
     torch.cuda.empty_cache()
     torch.save({"ref": ref}, ref_pt)
     print(f"[parity] reference written to {ref_pt}", flush=True)
+    print("PARITY-REF-OK", flush=True)
 
 
 def serve_phase(enc, ref):
@@ -109,11 +123,16 @@ def serve_phase(enc, ref):
                           (r_lps[i_] - served[tid])
             kl_sum += kl
             n += 1
-    print(f"PARITY: n={n} top1-agree={agree1/n*100:.1f}% "
+    if n == 0:
+        raise SystemExit("PARITY-STRUCTURAL-MISMATCH: no positions compared")
+    agreement = agree1 / n
+    print(f"PARITY: n={n} top1-agree={agreement*100:.1f}% "
           f"top{K}-overlap={overlap/n*100:.1f}% "
-          f"mean-KL(topK)={kl_sum/n:.4f}", flush=True)
-    ok = (agree1 / n) > 0.6        # structural-mismatch detector
+          f"mean-topK-drift={kl_sum/n:.4f}", flush=True)
+    ok = agreement > 0.6          # structural-mismatch detector
     print("PARITY-" + ("OK" if ok else "STRUCTURAL-MISMATCH"), flush=True)
+    if not ok:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
