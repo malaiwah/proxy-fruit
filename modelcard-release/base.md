@@ -35,7 +35,7 @@ production-stack artifact).
 
 Developing serving kernels (sparse MLA, mixed-tier Trellis dequant, MTP
 speculative decoding, fp8/nvfp4 KV) against the real ~754B GLM-5.2 needs
-~200 GB of weights per node. Fruit reproduces the *shape* of the
+~320 GB of weights per node (754B at ~3.4 bpw). Fruit reproduces the *shape* of the
 problem — every tensor name, quant tier layout, indexer, and the MTP
 head — in 2.89 GiB, so a single consumer GPU can run the full serving
 gauntlet in minutes.

@@ -238,7 +238,7 @@ took MTP acceptance from 0.4% to 98.6% (REVIEW.md findings 1–3).
 
 - **Encode:** Fruit 5.04B SIQ export = **~49 s per MoE layer, ~12 min
   total** on one RTX 5090, 2.89 GiB out (SMOKE_PLAN home tier). GLM-5.2
-  355B encodes are multi-hour multi-GPU affairs (kquant's own Kimi pipeline
+  ~754B encodes are multi-hour multi-GPU affairs (kquant's own Kimi pipeline
   budgets 12-GPU runs; brandonmusic's TR3 encodes likewise).
 - **VRAM:** the full Fruit serve gauntlet fits one 32 GB 5090 at
   `gpu_memory_utilization=0.75`, 2k ctx. GLM-5.2 needs AIBeast
@@ -325,14 +325,13 @@ labeled as such).
    these pools scale only by heads ×4 / hidden ×6 factors per the manifest);
    KV pool scales by layer count and head geometry, NOT by codec.
    **Label every projected number SPECULATION-extrapolated.**
-6. **Consistency warning before quoting projections (MEASURED arithmetic):**
-   the manifest parent geometry (75+ MoE layers × 256 experts × 3 ×
-   6144×2048) implies ~725B routed-expert params alone — inconsistent with
-   the model card's "355B total" (and consistent with FEASIBILITY.md's
-   "~750B", §2.1). Recompute all scale factors from the *actual* parent
-   `config.json` (on vault under the brandonmusic TR3 snapshots) before
-   publishing any GLM-projected table. (Michel's "moe_inter 1536" recollection
-   vs the manifest's 2048 is part of the same unresolved knot.)
+6. **Consistency check — RESOLVED 2026-08-07:** the contradiction was
+   real and the manifest arithmetic won. Derived from the canonical
+   serving config (`/mnt/vault/llm/glm52-franken/src/config.json`):
+   GLM-5.2 ≈ **754B total / 42B active** (routed experts alone 724.8B;
+   hidden 6144, moe_inter 2048 — "355B/32B" and "1536" were GLM-4.5
+   values). Cards and README corrected; use ~1:150 total / ~1:91 active
+   in every projection.
 
 Why this matters for H2 specifically: artifact-on-disk is only half the
 memory story — serve-time footprint (dequant workspaces, decode tables, X4T
@@ -350,7 +349,7 @@ numbers for either at Fruit scale. This protocol produces them.
 
 **Supported with a scope note.** Evidence FOR: (a) the harness just executed
 this exact play for SIQ end-to-end, catching two real serving bugs (RoPE
-layout, eh_proj halves) that would have been catastrophic at 355B — MEASURED;
+layout, eh_proj halves) that would have been catastrophic at ~754B — MEASURED;
 (b) the Fruit pilot reproduced two live b12x kernel issues (#121 mHC NaN,
 #107 mixed-tier prefill) with maintainer-visible comments — MEASURED,
 proving proxy-scale repros transfer upstream; (c) kquant's own porting guide
