@@ -20,7 +20,7 @@ b12x/SparkInfer stack.
 |---|---|---|
 | 1 | Fruit can qualify a kquant codec before touching ~754B GLM-5.2 | **Largely supported** — the standing harness exists and just did exactly this for SIQ; but QSRT's own porting doctrine says record/mode geometry is model-native, so Fruit qualifies the *codec machinery and quality*, not GLM-5.2's exact mode table. Ratio is **~1:150 total / ~1:91 active**, not 1:50 (see §2 — RESOLVED 2026-08-07). |
 | 2 | QSRT will be MORE memory-efficient than SIQ K4K3 mixed | **Plausible, modest, and conditional** — arithmetic says ~11% smaller on expert payload (3.0 vs 3.375 bpw), ~7% end-to-end, *before* QSRT metadata and X4T promotions eat it back. Vs SIQ uniform-K3 it is 0%. Serve-time footprint is the other half — unverified; measure at Step C with the §3.3 memory-forensics protocol. |
-| 3 | QSRT can serve efficiently, close to SIQ K4K3 | **Cannot be tested today**: the QSRT *runtime does not exist in any public repo or in our pinned images* (verified, §1.4). Kernel numbers are CLAIMED from the author's synthetic TP12 benchmarks on SM120 silicon and look good (W4A8 2.2–3.6× over W4A16), but TP12-only, no end-to-end checkpoint latency, nothing for TP1. |
+| 3 | QSRT can serve efficiently, close to SIQ K4K3 | **Cannot be tested today, but the gap is closing fast**: the vLLM loader/integration half went public 2026-08-06 (branch `k3-pp2tp6`); the sparkinfer kernel half (SQG codebooks, trellis-W4A8, X4T predecode) is still private (verified, §1.4). Kernel numbers are CLAIMED from the author's synthetic TP12 benchmarks on SM120 silicon and look good (W4A8 2.2–3.6× over W4A16), but TP12-only, no end-to-end checkpoint latency, nothing for TP1. |
 | 4 | QSRT maintains correctness "where it counts" vs SIQ | **Unknown — and the author's own first artifact FAILED its quality gate** and was scrapped (calibration redesign in progress). Our parity/KLD/MTP/needle harness is precisely the right instrument; measure at Step E. |
 
 Bottom line: encode-side experimentation on Fruit can start now (kquant's
@@ -115,20 +115,45 @@ small-corpus, hypothesis-forming (the author says so themselves). **QSRT has
 no validated checkpoint anywhere yet.** Fruit qualifying it would be a
 genuine contribution, not a rubber stamp.
 
-### 1.4 What is UNKNOWN / verified-absent (MEASURED, 2026-08-07)
+### 1.4 Runtime availability: SPLIT (MEASURED, deep-dig 2026-08-07)
 
-- **No QSRT runtime in anything we can run.** Verified by grep:
-  - production r28 image
-    (`voipmonitor/vllm:gilded-gnosis-v20-vllme1e9426-si200c1db-fi801d57a-cu132-20260804-r28`):
-    zero `qsrt|sqg` hits in
-    `/opt/venv/.../vllm/model_executor/layers/quantization/` and in the
-    installed `sparkinfer` package (CPU-only container grep, no GPU used).
-  - public **b12x** master @ `680d8195b80420296d7fed2688b75406be15eb38`
-    (full git tree listing): zero `qsrt|sqg|x4t` paths; only the SIQ
-    `trellis_linear` kernels exist.
-  - The brief references `b12x/benchmarks/benchmark_x4t_w4a16_moe_tp12.py`
-    and AGENTS.md points at `/home/luke/projects/vllm` + `/home/luke/projects/b12x`
-    — i.e. **the runtime lives in the author's private checkouts**.
+Exhaustive public-surface sweep (all 7 kquant branches full-history, all 63
+b12x branches, all 215 branches of the org vLLM fork, 41 b12x forks + 13
+vLLM forks by branch name, GitHub code/commit search, PyPI, HF):
+
+- **The vLLM integration half IS public — since 2026-08-06.**
+  `local-inference-lab/vllm` branch **`k3-pp2tp6`** @ `34d215334`
+  ("serve: add Kimi-K3 QSRT TP12 runtime", Luke Alonso): quantization
+  readers `kquant_kimi_k3_qsrt_tp12.py` (793 ln), `kquant_x4t.py`
+  (1042 ln, the X4T scale-plane codec), `kquant_mixed_exl3_tp12.py`, an
+  extended `nvfp4_nf3_hybrid.py` consumer (source_format
+  `exl3_trellis_sqg_cheb_k2_q8h4_w2_e4m3`, `trellis_*_pair_modes` kwargs),
+  `fused_moe/kquant_capture.py`, tests, and a serve script
+  (`Kimi-K3-QSRT-CHEB-Q8H4-ROUTED-X4T-3p11-KLD-v1-serve` — artifact itself
+  not published). All pure Python.
+- **The sparkinfer/b12x kernel half is NOT public anywhere.** The branch
+  imports modules that exist in no public ref: `…kernels.trellis_w4a8`
+  (`run_trellis_w4a8_moe`), `_lib.quant.x4t_scales`
+  (`make_x4t_scale_batch`), `moe.calibration`,
+  `prepare_w4a16_x4t_tp12_weights`; public b12x supports only the
+  `exl3_trellis_mcg` codebook (zero `sqg*`/`pair_mode*` hits in any
+  branch). Nuance: the *generic* W4A16 trellis MoE machinery
+  (`w4a16_fused_moe_hybrid_launch`, CuTeDSL kernels) IS public in b12x
+  master — what's missing is the QSRT layer on top (SQG/SQG-Cheb
+  codebooks, pair-mode mixed trellis, trellis-W4A8, X4T predecode).
+  **Watch trigger:** a b12x push containing `sqg`/`pair_mode` is the
+  unblock signal for Step D.
+- Our pinned r25/r28 images predate all of this: zero `qsrt|sqg` hits in
+  their vLLM quantization layers and `sparkinfer` packages (CPU-only
+  container grep).
+- People: luke = **`lukealonso`** (Luke Alonso; also owns the PyPI
+  `sparkinfer` 0.0.1 name-reservation). Second kquant committer: Martin
+  Vit = **`voipmonitor`** (whose vllm/b12x/exllamav3/InstantTensor forks
+  we already build from). kquant has **2 PRs, 0 forks, 0 issues**:
+  **PR #1 = a GLM recipe, opened by voipmonitor** (read it FIRST — the
+  GLM port conversation has already started without us), PR #2 = QSRT
+  profile-5 pipeline (lukealonso; + branch `agent/qsrt-profile5-pipeline`,
+  whose head marks X4T TP12 shards for `voipmonitor/InstantTensor`).
 - Unknown: serialized artifact schema (slab/sidecar container is described
   in prose; `kquant/pack/qsrt_slab.py`, `qsrt_package.py` are the source of
   truth — read them before writing bytes), vLLM loader contract, whether the
@@ -434,11 +459,23 @@ weights live on vault NFS.
    `kquant/pack/qsrt_slab.py` + `qsrt_package.py` (real artifact schema),
    `kquant/exl3_encoder_backend.py` (encoder entry),
    `kquant/sqg_e4m3.py` (label law), `scripts/pack_qsrt_candidates_tp12.py`.
-3. Re-check for runtime landings since 2026-08-07 (this gates Phase 2):
+3. Re-check for the kernel-half landing (this gates Phase 2). The
+   loader half is already public — study it now:
    ```bash
-   gh api repos/local-inference-lab/b12x/commits --jq '.[].commit.message' | grep -iE 'qsrt|sqg|x4t'
-   gh search code --owner local-inference-lab 'qsrt' --limit 20
+   # the QSRT vLLM integration (public since 2026-08-06):
+   git clone -b k3-pp2tp6 https://github.com/local-inference-lab/vllm ~/kquant-work/vllm-qsrt  # pin 34d215334
+   # readers: vllm/model_executor/layers/quantization/kquant_kimi_k3_qsrt_tp12.py, kquant_x4t.py,
+   #          kquant_mixed_exl3_tp12.py, nvfp4_nf3_hybrid.py (consumer), fused_moe/kquant_capture.py
+   # kernel-half watch trigger (sqg/pair_mode appearing in b12x = Step D unblocked):
+   gh api repos/local-inference-lab/b12x/commits --jq '.[].commit.message' | grep -iE 'qsrt|sqg|x4t|pair_mode'
    ```
+   Also read **kquant PR #1 (a GLM recipe, opened by voipmonitor)** and
+   PR #2 (QSRT profile-5 pipeline) — the GLM-5.2 port discussion has
+   already started; coordinate rather than duplicate. Extracted copies of
+   the k3-pp2tp6 readers + serve scripts from this session's dig are in
+   the session scratchpad (`kquant_x4t.py`, `kquant_kimi_k3_qsrt_tp12.py`,
+   `nvfp4_nf3_hybrid.py`, `kquant_capture.py`) — re-clone for anything
+   load-bearing.
 4. `uv sync --dev` in the kquant checkout; run `.venv/bin/pytest -q`
    (CPU suite) to establish a green baseline before touching anything.
 5. **Open the licensing + roadmap conversation**: file a kquant issue (as
@@ -553,10 +590,14 @@ issues.
    default all-rights-reserved. Using it locally for research is low-risk;
    *redistributing* artifacts or vendored code is not cleared. Ask luke
    (Step A.5). The ExLlamaV3-derived parts are MIT.
-2. **Runtime availability** (blocking for H3): QSRT kernels exist only in
-   the author's private checkouts; public b12x master has none (verified
-   2026-08-07). Timeline unknown. Mitigation: Phase-1 CPU/reference-decode
-   qualification (Step C) is runtime-independent.
+2. **Runtime availability** (blocking for H3, but trending unblocked):
+   the vLLM loader half went public 2026-08-06 (`k3-pp2tp6`, §1.4); the
+   sparkinfer kernel half (SQG codebooks, pair-mode trellis, trellis-W4A8,
+   X4T predecode) exists only in the author's private checkout — the
+   public branch imports modules absent from every public b12x ref
+   (verified exhaustively 2026-08-07). Push cadence suggests it may land
+   soon; watch trigger in Step A.3. Mitigation: Phase-1
+   CPU/reference-decode qualification (Step C) is runtime-independent.
 3. **sm_120 kernel fit:** CLAIMED numbers are RTX PRO 6000 (same SM120
    family, more SMs/smem-per-SM headroom than the 5090). SQG's 58–106 KiB
    tables are process-global (not per-CTA smem) so the SIQ (3,4) smem
@@ -585,6 +626,9 @@ issues.
 |---|---|---|
 | `local-inference-lab/kquant` | `master` | `79461d37a3a863fd2859e5ae14438e184eaf9ca3` |
 | `local-inference-lab/vllm` | `dev/gilded-gnosis` | `30038602b71395f481ef4a6edfe4fcf8551d9c15` |
+| `local-inference-lab/vllm` | **`k3-pp2tp6`** (QSRT loader half, Luke Alonso `lukealonso`) | `34d215334` (2026-08-06) |
+| `local-inference-lab/kquant` PR #1 | GLM recipe (author `voipmonitor` = Martin Vit) | open |
+| `local-inference-lab/kquant` PR #2 | QSRT profile-5 pipeline (`lukealonso`; branch `agent/qsrt-profile5-pipeline` @ `5428f34`) | open |
 | — open PR #249 (heterogeneous per-layer expert widths, ours) | head `gg-heterogeneous-expert-widths` | `e15f0fedcd7baa8df2764df374aff66bb43e2558` |
 | `local-inference-lab/b12x` (ex-SparkInfer; pip pkg still `sparkinfer` 1.x) | `master` | `680d8195b80420296d7fed2688b75406be15eb38` |
 | `voipmonitor/flashinfer` | `codex/sm120-dspark-stack-20260711` | `801d57a08958c13d375ddbb6be3be4808f48a708` (matches `fi801d57a` in image tags) |
@@ -607,3 +651,125 @@ super-block scalar quants, unrelated to "kquant" despite the name;
 pass correctness tests on random-weight fixtures: the gap Fruit closes),
 yujiepan tiny-random zoo, inference-optimization/GLM-5.2-0.8B (each half of
 the idea; see `~/proxy-fruit/README.md` for the full genealogy).
+
+---
+
+## 9. Prior art & novelty assessment (arXiv case) — 2026-08-07
+
+Context: Michel floated to luke that QSRT may warrant an arXiv paper. This
+section is the prior-art due diligence: QSRT decomposed into mechanisms
+**per the technical brief** (not the name), searched per mechanism and for
+the combination (arXiv API + web, 2026-08-07). Uncertain matches are
+labeled. All "M#" references below are to §9.1.
+
+### 9.1 Mechanism decomposition (from `docs/qsrt-technical-brief.md`)
+
+- **M1 — Trellis substrate:** L16 tail-biting de Bruijn ("bitshift")
+  trellis, Viterbi encode, Hadamard incoherence processing, BlockLDLQ
+  error feedback. Inherited from the QTIP→EXL3 lineage (the repo vendors
+  `exl3_compat` and says so).
+- **M2 — SQG reconstruction law:** bijective assignment of the 2^16 trellis
+  edges to equal-probability quantile microcells; per-state stratified
+  coverage (every state exposes exactly one candidate per stratum);
+  conditional-mean labels projected RNE to **finite E4M3**; optional
+  interval-constrained Chebyshev evaluator replacing the 64K LUT.
+- **M3 — Fixed-payload rate shifting:** function-preserving neuron
+  permutation (P·W1, P·W3, W2·Pᵀ) → importance-contiguous 128-neuron
+  records; equal-byte K2↔K4 donor/recipient exchange around a K3 body in
+  paired records (P24/P33); every mode = exactly 3.0 path bits/weight at
+  identical physical size; mode = a small expert-static ID.
+- **M4 — Expert-static rate selection with statistical gates:** per-expert
+  (r13, r2) chosen by full dense-H BlockLDLQ candidate re-encodes, scored
+  by applied-gate² routed output error on document-disjoint samples,
+  accepted only on a paired document-bootstrap lower-confidence-bound win
+  vs the matched-R0 counterfactual; expert-stratified H2 with shrinkage.
+- **M5 — X4T exact endpoint:** byte-exact MXFP4 nibble plane + lossless
+  UE8M0 scale-plane compression in a fixed-stride, directly-indexable,
+  CUDA-graph-safe container with a one-launch routed predecoder.
+- **M6 — Global exact-byte allocation:** Lagrangian D + λ·bytes sweep over
+  per-expert {selected-lossy vs X4T} under a checkpoint byte budget.
+- **M7 — Hardware-native decode:** because M2's alphabet is finite E4M3,
+  the W4A8 path feeds decoded weights directly to SM120 block-scaled MMA;
+  process-global 58–106 KiB decode tables instead of per-CTA smem
+  codebooks.
+
+### 9.2 Per-mechanism prior-art table
+
+| Mechanism | Closest prior art (arXiv, year) | Same | Different / novel |
+|---|---|---|---|
+| M1 trellis substrate | **QTIP** 2406.11235 (2024) — bitshift/de Bruijn trellis, tail-biting, lookup-free codes; **QuIP#** 2402.04396 (2024) Hadamard incoherence; **QuIP** 2307.13304 LDLQ; **GPTQ** 2210.17323; TCQ origin: Marcellin & Fischer, IEEE Trans. Commun. 38(1), 1990 (pre-arXiv); recent lineage: **Q-Palette** 2509.20214, **BCJR-QAT** 2605.10655 | Everything structural: graph, Viterbi, tail-biting, rotations, LDLQ | **Nothing** — deliberately inherited (repo vendors exl3_compat; brief credits it). Do not claim novelty here. |
+| M2 SQG law | **NF4/QLoRA** 2305.14314 (2023) — equal-probability normal-quantile codebook; NF4-optimality critique (Yoshida 2023, *ID uncertain*); BOF4 (Blumenberg et al. 2025, *ID unconfirmed*); QTIP's computed codes (1MAD/3INST: pseudo-Gaussian via hashing) | Quantile/Gaussian-optimal scalar codebooks exist; QTIP already generates Gaussian-ish labels on a trellis | **Novel and the paper's core**: imposing the quantile *stratification* on the trellis edge set with per-state full-stratum coverage + all-rank bijection is in no found paper; arXiv searches "quantile"+"trellis" returned **zero hits**. The interval-constrained Chebyshev decoder (prove-by-exhaustion label identity) is a neat verified-numerics twist. |
+| M3 fixed-payload rate shift | Channel permutation for quantization grouping: **Atom** 2310.19102, **QEFT** 2410.08661, **CMPQ** 2410.13056, **PermuQuant** 2605.09503, **PolyQ** 2607.14618; GPTQ act-order; budgeted allocation: **Q-Palette** 2509.20214 (fractional-bit TCQ, info-theoretically optimal *layer-level* allocation), **FGMP** 2504.14152 | Permutation-to-contiguity and importance-ranked precision are both established | **Novel framing**: *equal-byte donor/recipient exchange inside a constant-size payload* (rate moves within an expert, never across; artifact stride constant; mode = 1 small ID, no per-channel map, no runtime shuffle). Q-Palette is the nearest spirit but reallocates bytes across layers. The serving rationale (fixed container ⇒ allocator/layout-free mixed rate) appears unpublished. *Uncertain*: classic video-codec "bit borrowing" analogies exist pre-LLM; cite Shoham & Gersho 1988 defensively. |
+| M4 per-expert selection + gates | MoE quantization wave: **QMoE** 2310.16795, **MxMoE** 2505.05799, **MoEQuant** 2505.03804, **EAQuant** 2506.13329, **GEMQ** 2605.23078, **AlphaQ** 2606.04980, expert-wise MP with guarantees 2604.06515, **CodeQuant** 2604.10496, Dynamic Expert Quantization 2511.15015 | Per-expert precision by importance/frequency is now crowded territory (2024–2026) | Partially novel: (a) expert-static modes at **fixed payload** (others change expert byte sizes); (b) acceptance by *paired document-bootstrap LCB vs matched-R0 counterfactual* — statistically disciplined gating essentially absent from this literature (most report raw ppl deltas); (c) applied-gate² routed-replay objective. (b) could anchor a methods contribution. |
+| M5 X4T scale-plane codec | **ZipNN** 2411.05239 — exponent planes are low-entropy; exponent-concentration 2510.02676; lossless low-precision components 2508.19263; **ZipServ** 2603.17435; ENEC 2604.03298 | Exploiting low-entropy scale/exponent planes losslessly is established | Novel-ish: prior codecs are entropy-coded (CPU decompress, no random access); X4T is **fixed-stride, directly indexable, one-launch routed GPU predecode, CUDA-graph-safe**, with measured 1.25–8.19 µs routed overhead. As a standalone contribution it is borderline; as the system's exact endpoint it strengthens the paper. |
+| M6 global allocation | Shoham & Gersho 1988; Everett 1963 (Lagrangian budget allocation — textbook) | The λ-sweep is literally the textbook method | Not novel. Frame as engineering; the exact-byte (vs nominal-bpw) X4T costing is a nice practical detail only. |
+| M7 FP8-native decode | Block-scaled FP4/FP8 MMA format work: **MixFP4** 2605.31035, Four-over-six 2512.02010, format catalog 2606.09686, **EVA** 2605.24144 (VQ decode→GEMM); all TCQ art above decodes to FP16/BF16 | Hardware block-scaled MMA consumption is the current wave | **Novel at the intersection**: no found paper makes a *trellis* codec's reconstruction alphabet exactly finite-E4M3 so decode feeds SM120 block-scaled MMA natively (the "FP8-native TCQ" claim). *Uncertain*: verify BCJR-QAT/Q-Palette kernel decode targets before claiming primacy. |
+
+**Combination check (MEASURED search negatives, 2026-08-07):** arXiv API
+queries `"trellis"+"mixture of experts"`, `"quantile"+"trellis"`,
+`"de Bruijn"+"quantization"` (cs.LG) returned zero relevant results; web
+sweeps of the 2025–2026 MoE-quantization wave found no trellis-coded MoE
+work. **No prior art found combining M2+M3+M4 in any pairing.**
+
+### 9.3 Honest novelty verdict
+
+**Would plausibly survive peer review** (with the right experiments):
+1. **SQG** (M2, packaged with M7): quantile-stratified trellis labeling
+   with per-state stratum coverage and an FP8-native alphabet — the
+   clearest single contribution; no adjacent hit found.
+2. **Fixed-payload intra-expert rate shifting** (M3): a genuinely different
+   *constraint* than the allocation literature optimizes, with a real
+   systems justification (constant container, static layout, graph-safe).
+3. The **bootstrap-gated expert-static selection** (M4b) as a methods
+   contribution, and the M2+M3+M4 **system combination** for MoE.
+
+**Valuable engineering, not paper-novel:** M1 (inherited — must be cited
+generously, incl. exllamav3), M6, decode-table layouts, and X4T's container
+mechanics (unless generalized + benchmarked against ZipNN-class codecs).
+
+**What blocks a paper today (from the author's own brief):** no validated
+end-to-end checkpoint (the R44/X4T artifact failed its quality trajectory,
+§1.3); quality evidence = a 24-expert panel with ~2% SSE deltas; W4A8
+latency = synthetic fixtures only. A reviewer will ask for full-model
+matched-bpw comparisons, ablations, and end-to-end latency.
+
+**Experiments a paper needs — and what Fruit can supply ($0, this box):**
+- *Full-model quality at matched bpw* vs QTIP/EXL3-style uniform K3 — our
+  SIQ-K3-uniform export IS that baseline (`FRUIT_TIERS=k3`), with the bf16
+  twin as KLD reference and the parity harness (top-1/KL) as the metric →
+  Step C produces exactly this table. Kimi-K3/GLM-5.2 large-scale numbers
+  remain luke's side.
+- *Ablations Fruit can run:* rate-shift on/off (R0-only vs selected modes —
+  the matched-R0 counterfactual machinery already exists in kquant);
+  permutation on/off; SQG vs MCG codebook at fixed graph (SIQ's encoder is
+  the MCG control arm — a uniquely clean A/B since both stacks share the
+  exl3 substrate).
+- *MTP/spec-decode acceptance as a quantization metric* — our harness's
+  novel angle (94–98% baselines, exquisitely distribution-sensitive);
+  no quantization paper found uses drafter acceptance as a quality metric —
+  this could be a selling point of the evaluation section.
+- *Serve-time memory accounting* per §3.3 (decode tables vs per-shape JIT
+  kernels vs codebooks) — differentiates "efficient" claims beyond bpw.
+- *Kernel latency:* end-to-end decode tok/s vs the EXL3/SIQ kernels on
+  SM120 (Fruit-scale on the 5090 once the runtime lands; TP12 Kimi-scale
+  on luke's hardware).
+
+### 9.4 Suggested related-work reading list
+
+Core lineage: 2406.11235 (QTIP) · 2402.04396 (QuIP#) · 2307.13304 (QuIP) ·
+2210.17323 (GPTQ) · 2305.14314 (QLoRA/NF4) · Marcellin & Fischer 1990
+(TCQ, IEEE) · Shoham & Gersho 1988 (allocation, IEEE).
+TCQ recent: 2509.20214 (Q-Palette) · 2605.10655 (BCJR-QAT) · 2606.29578
+(SoftBinary) · 2604.18556 (GSQ, *relevance uncertain*).
+MoE quantization: 2310.16795 (QMoE) · 2505.05799 (MxMoE) · 2505.03804
+(MoEQuant) · 2506.13329 (EAQuant) · 2605.23078 (GEMQ) · 2606.04980
+(AlphaQ) · 2604.06515 · 2604.10496 (CodeQuant) · 2511.15015.
+Permutation / mixed precision: 2310.19102 (Atom) · 2410.08661 (QEFT) ·
+2410.13056 (CMPQ) · 2504.14152 (FGMP) · 2605.09503 (PermuQuant) ·
+2607.14618 (PolyQ) · 2510.16805 (survey).
+Lossless scale/exponent planes: 2411.05239 (ZipNN) · 2510.02676 ·
+2508.19263 · 2603.17435 (ZipServ) · 2604.03298 (ENEC).
+FP4/FP8 hardware formats & codebooks: 2605.31035 (MixFP4) · 2512.02010 ·
+2606.09686 (format catalog) · 2605.24144 (EVA) · 2605.08692 (AAAC) ·
+2605.26339 (QAM-W) · 2603.29078 (PolarQuant) · 2605.02404 · 2605.14844
+(XFP).
